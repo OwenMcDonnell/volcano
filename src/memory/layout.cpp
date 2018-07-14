@@ -9,6 +9,8 @@ using namespace science;
 namespace memory {
 
 int Image::makeTransitionAccessMasks(VkImageMemoryBarrier& imageB) {
+  language::Device& dev = mem.dev;
+
   // When srcAccessMask includes *_READ_BIT, that means:
   // Any reads will see data as it was before the image transition began.
   //
@@ -47,12 +49,12 @@ int Image::makeTransitionAccessMasks(VkImageMemoryBarrier& imageB) {
       isUnknownSrc = false;
       break;
 
-    case VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL:
-// __ANDROID__ has its own vulkan.h that is not always up to date
-#ifndef __ANDROID__
     case VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_STENCIL_ATTACHMENT_OPTIMAL_KHR:
     case VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_STENCIL_READ_ONLY_OPTIMAL_KHR:
-#endif
+      dev.apiUsage(1, 1, 0, true, "makeTransitionAccessMasks: oldLayout=%u",
+                   imageB.oldLayout);
+      // fall through
+    case VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL:
       imageB.srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT;
       isUnknownSrc = false;
       break;
@@ -85,8 +87,10 @@ int Image::makeTransitionAccessMasks(VkImageMemoryBarrier& imageB) {
       isUnknownSrc = false;
       break;
 
-#if defined(VK_HEADER_VERSION) && VK_HEADER_VERSION >= 49
     case VK_IMAGE_LAYOUT_SHARED_PRESENT_KHR:
+      dev.extensionUsage("VK_KHR_shared_presentable_image", true,
+                         "makeTransitionAccessMasks: oldLayout=%u",
+                         imageB.oldLayout);
       imageB.srcAccessMask =
           VK_ACCESS_COLOR_ATTACHMENT_READ_BIT |
           VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT |
@@ -96,7 +100,6 @@ int Image::makeTransitionAccessMasks(VkImageMemoryBarrier& imageB) {
           VK_ACCESS_MEMORY_WRITE_BIT;
       isUnknownSrc = false;
       break;
-#endif
 
     case VK_IMAGE_LAYOUT_RANGE_SIZE:
     case VK_IMAGE_LAYOUT_MAX_ENUM:
@@ -126,10 +129,11 @@ int Image::makeTransitionAccessMasks(VkImageMemoryBarrier& imageB) {
 
     case VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL: {
       // Reset imageB.subresourceRange, then set it to Depth.
-      auto u = Subres(imageB.subresourceRange).addDepth();
+      VkOverwrite(imageB.subresourceRange);
+      imageB.subresourceRange.aspectMask |= VK_IMAGE_ASPECT_DEPTH_BIT;
       // Also add Stencil if requested.
       if (FormatHasStencil(info.format)) {
-        u.addStencil();
+        imageB.subresourceRange.aspectMask |= VK_IMAGE_ASPECT_STENCIL_BIT;
       }
 
       imageB.dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
@@ -137,18 +141,18 @@ int Image::makeTransitionAccessMasks(VkImageMemoryBarrier& imageB) {
       isUnknownDst = false;
       break;
     }
-    case VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL:
-// __ANDROID__ has its own vulkan.h that is not always up to date
-#ifndef __ANDROID__
     case VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_STENCIL_ATTACHMENT_OPTIMAL_KHR:
     case VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_STENCIL_READ_ONLY_OPTIMAL_KHR:
-#endif
-    {
+      dev.apiUsage(1, 1, 0, true, "makeTransitionAccessMasks: newLayout=%u",
+                   imageB.oldLayout);
+      // fall through
+    case VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL: {
       // Reset imageB.subresourceRange, then set it to Depth.
-      auto u = Subres(imageB.subresourceRange).addDepth();
+      VkOverwrite(imageB.subresourceRange);
+      imageB.subresourceRange.aspectMask |= VK_IMAGE_ASPECT_DEPTH_BIT;
       // Also add Stencil if requested.
       if (FormatHasStencil(info.format)) {
-        u.addStencil();
+        imageB.subresourceRange.aspectMask |= VK_IMAGE_ASPECT_STENCIL_BIT;
       }
       imageB.dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT;
       isUnknownDst = false;
@@ -184,8 +188,10 @@ int Image::makeTransitionAccessMasks(VkImageMemoryBarrier& imageB) {
       isUnknownDst = false;
       break;
 
-#if defined(VK_HEADER_VERSION) && VK_HEADER_VERSION >= 49
     case VK_IMAGE_LAYOUT_SHARED_PRESENT_KHR:
+      dev.extensionUsage("VK_KHR_shared_presentable_image", true,
+                         "makeTransitionAccessMasks: newLayout=%u",
+                         imageB.newLayout);
       imageB.dstAccessMask =
           VK_ACCESS_COLOR_ATTACHMENT_READ_BIT |
           VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT |
@@ -194,7 +200,6 @@ int Image::makeTransitionAccessMasks(VkImageMemoryBarrier& imageB) {
           VK_ACCESS_HOST_WRITE_BIT;
       isUnknownDst = false;
       break;
-#endif
 
     case VK_IMAGE_LAYOUT_UNDEFINED:
     case VK_IMAGE_LAYOUT_RANGE_SIZE:
@@ -227,7 +232,10 @@ VkImageMemoryBarrier Image::makeTransition(VkImageLayout newLayout) {
   imageB.newLayout = newLayout;
   imageB.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
   imageB.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-  Subres(imageB.subresourceRange).addColor().setMips(0, info.mipLevels);
+  VkOverwrite(imageB.subresourceRange);
+  imageB.subresourceRange.aspectMask |= VK_IMAGE_ASPECT_COLOR_BIT;
+  imageB.subresourceRange.baseMipLevel = 0;
+  imageB.subresourceRange.levelCount = info.mipLevels;
 
   if (makeTransitionAccessMasks(imageB)) {
     imageB.image = VK_NULL_HANDLE;

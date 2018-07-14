@@ -4,26 +4,38 @@
 
 namespace science {
 
-void ImageCopies::addSrc(memory::Image& src) {
-  for (uint32_t mipLevel = 0; mipLevel < src.info.mipLevels; mipLevel++) {
-    addSrcAtMipLevel(src, mipLevel);
-    SubresUpdate<VkImageSubresourceLayers>(back().dstSubresource)
-        .setMipLevel(mipLevel);
+void ImageCopies::add(memory::Image& src, memory::Image& dst) {
+  if (dst.info.extent.width != src.info.extent.width ||
+      dst.info.extent.height != src.info.extent.height ||
+      dst.info.extent.depth != src.info.extent.depth) {
+    logF("ImageCopies::add: src.extent != dst.extent\n");
+  }
+  uint32_t minLevels = src.info.mipLevels;
+  if (minLevels > dst.info.mipLevels) {
+    minLevels = dst.info.mipLevels;
+  }
+  for (uint32_t mipLevel = 0; mipLevel < minLevels; mipLevel++) {
+    addSingleMipLevel(src, mipLevel, dst, mipLevel);
   }
 }
 
-void ImageCopies::addSrcAtMipLevel(memory::Image& src, uint32_t mipLevel) {
+void ImageCopies::addSingleMipLevel(memory::Image& src, uint32_t srcMipLevel,
+                                    memory::Image& dst, uint32_t dstMipLevel) {
   emplace_back();
   VkImageCopy& region = back();
-  Subres(region.srcSubresource).addColor().setMipLevel(mipLevel);
-  Subres(region.dstSubresource).addColor();
+  region.srcSubresource = src.getSubresourceLayers(srcMipLevel);
+  region.dstSubresource = dst.getSubresourceLayers(dstMipLevel);
+  region.srcSubresource.aspectMask &= region.dstSubresource.aspectMask;
+  region.dstSubresource.aspectMask &= region.srcSubresource.aspectMask;
 
   region.srcOffset = {0, 0, 0};
   region.dstOffset = {0, 0, 0};
 
+  // Assume the dst size (dst.info.extent.{width,height} >> dstMipLevel)
+  // matches the src size.
   region.extent = src.info.extent;
-  region.extent.width >>= mipLevel;
-  region.extent.height >>= mipLevel;
+  region.extent.width >>= srcMipLevel;
+  region.extent.height >>= srcMipLevel;
 }
 
 SmartCommandBuffer::~SmartCommandBuffer() {

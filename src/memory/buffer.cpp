@@ -19,8 +19,7 @@ int Buffer::copy(command::CommandPool& pool, Buffer& src) {
          copy(cmdBuffer, src);
 }
 
-int Buffer::ctorError(language::Device& dev, VkMemoryPropertyFlags props,
-                      const std::vector<uint32_t>& queueFams) {
+int Buffer::validateBufferCreateInfo(const std::vector<uint32_t>& queueFams) {
   if (!info.size || !info.usage) {
     logE("Buffer::ctorError found uninitialized fields\n");
     return 1;
@@ -31,34 +30,101 @@ int Buffer::ctorError(language::Device& dev, VkMemoryPropertyFlags props,
   }
   info.queueFamilyIndexCount = queueFams.size();
   info.pQueueFamilyIndices = queueFams.data();
+  return 0;
+}
 
-  vk.reset();
-  VkResult v = vkCreateBuffer(dev.dev, &info, dev.dev.allocator, &vk);
+int Buffer::ctorError(VkMemoryPropertyFlags props,
+                      const std::vector<uint32_t>& queueFams) {
+  if (validateBufferCreateInfo(queueFams)) {
+    return 1;
+  }
+  vk.reset(mem.dev.dev);
+  VkResult v = vkCreateBuffer(mem.dev.dev, &info, mem.dev.dev.allocator, &vk);
   if (v != VK_SUCCESS) {
     logE("%s failed: %d (%s)\n", "vkCreateBuffer", v, string_VkResult(v));
     return 1;
   }
 
-  return mem.alloc({dev, *this}, props);
+#ifdef VOLCANO_DISABLE_VULKANMEMORYALLOCATOR
+  MemoryRequirements req(mem.dev, *this);
+  mem.vmaAlloc.requiredProps = props;
+#else
+  MemoryRequirements req(mem.dev, *this, VMA_MEMORY_USAGE_UNKNOWN);
+  req.info.requiredFlags = props;
+#endif
+  return mem.alloc(req);
 }
 
-int Buffer::bindMemory(language::Device& dev, VkDeviceSize offset /*= 0*/) {
-  VkResult v = vkBindBufferMemory(dev.dev, vk, mem.vk, offset);
+#ifndef VOLCANO_DISABLE_VULKANMEMORYALLOCATOR
+int Buffer::ctorError(VmaMemoryUsage usage,
+                      const std::vector<uint32_t>& queueFams) {
+  if (validateBufferCreateInfo(queueFams)) {
+    return 1;
+  }
+  vk.reset(mem.dev.dev);
+  VkResult v = vkCreateBuffer(mem.dev.dev, &info, mem.dev.dev.allocator, &vk);
   if (v != VK_SUCCESS) {
-    logE("%s failed: %d (%s)\n", "vkBindBufferMemory", v, string_VkResult(v));
+    logE("%s failed: %d (%s)\n", "vkCreateBuffer", v, string_VkResult(v));
+    return 1;
+  }
+  return mem.alloc({mem.dev, *this, usage});
+}
+#endif /*VOLCANO_DISABLE_VULKANMEMORYALLOCATOR*/
+
+int Buffer::bindMemory(VkDeviceSize offset /*= 0*/) {
+  auto& dev = mem.dev;
+  VkResult v;
+  const char* functionName;
+#ifndef VOLCANO_DISABLE_VULKANMEMORYALLOCATOR
+  if (offset) {
+    logE("VulkanMemoryAllocator sets offset automatically.\n");
+    logE("Buffer::bindMemory(offset=%llu) is invalid.\n",
+         (unsigned long long)offset);
+    return 1;
+  }
+  functionName = "vmaBindBufferMemory";
+  v = vmaBindBufferMemory(dev.vmaAllocator, mem.vmaAlloc, vk);
+#else /*VOLCANO_DISABLE_VULKANMEMORYALLOCATOR*/
+#if VK_HEADER_VERSION != 74
+/* Fix the excessive #ifndef __ANDROID__ below to just use the Android Loader
+ * once KhronosGroup lands support. */
+#error KhronosGroup update detected, splits Vulkan-LoaderAndValidationLayers
+#endif
+#ifndef __ANDROID__
+  if (dev.apiVersionInUse() < VK_MAKE_VERSION(1, 1, 0)) {
+#endif
+    functionName = "vkBindBufferMemory";
+    v = vkBindBufferMemory(dev.dev, vk, mem.vmaAlloc.vk, offset);
+#ifndef __ANDROID__
+  } else {
+    // Use Vulkan 1.1 features if supported.
+    functionName = "vkBindBufferMemory2";
+    VkBindBufferMemoryInfo infos[1];
+    VkOverwrite(infos[0]);
+    infos[0].buffer = vk;
+    infos[0].memory = mem.vmaAlloc.vk;
+    infos[0].memoryOffset = offset;
+    v = vkBindBufferMemory2(dev.dev, sizeof(infos) / sizeof(infos[0]), infos);
+  }
+#endif /* __ANDROID__ */
+#endif /*VOLCANO_DISABLE_VULKANMEMORYALLOCATOR*/
+  if (v != VK_SUCCESS) {
+    logE("%s failed: %d (%s)\n", functionName, v, string_VkResult(v));
     return 1;
   }
   return 0;
 }
 
 int Buffer::reset() {
-  mem.allocSize = 0;
-  mem.vk.reset();
-  vk.reset();
+#ifdef VOLCANO_DISABLE_VULKANMEMORYALLOCATOR
+  mem.vmaAlloc.allocSize = 0;
+  mem.vmaAlloc.vk.reset(mem.dev.dev);
+#endif /*VOLCANO_DISABLE_VULKANMEMORYALLOCATOR*/
+  vk.reset(mem.dev.dev);
   return 0;
 }
 
-int Buffer::copyFromHost(language::Device& dev, const void* src, size_t len,
+int Buffer::copyFromHost(const void* src, size_t len,
                          VkDeviceSize dstOffset /*= 0*/) {
   if (!(info.usage & VK_IMAGE_USAGE_TRANSFER_SRC_BIT)) {
     logW("WARNING: Buffer::copyFromHost on a Buffer where neither\n");
@@ -86,18 +152,18 @@ int Buffer::copyFromHost(language::Device& dev, const void* src, size_t len,
   }
 
   if (dstOffset + len > info.size) {
-    logE("BUG: Buffer::copyFromHost(len=0x%lx, dstOffset=0x%llx).\n", len,
+    logE("BUG: Buffer::copyFromHost(len=0x%zx, dstOffset=0x%llx).\n", len,
          (unsigned long long)dstOffset);
     logE("BUG: when Buffer.info.size=0x%llx\n", (unsigned long long)info.size);
     return 1;
   }
 
   void* mapped;
-  if (mem.mmap(dev, &mapped)) {
+  if (mem.mmap(&mapped)) {
     return 1;
   }
   memcpy(reinterpret_cast<char*>(mapped) + dstOffset, src, len);
-  mem.munmap(dev);
+  mem.munmap();
   return 0;
 }
 
@@ -114,7 +180,7 @@ int UniformBuffer::copyAndKeepMmap(command::CommandPool& pool, const void* src,
   }
 
   if (dstOffset + len > stage.info.size) {
-    logE("BUG: UniformBuffer::copyAndKeepMmap(len=0x%lx, dstOffset=0x%llx).\n",
+    logE("BUG: UniformBuffer::copyAndKeepMmap(len=0x%zx, dstOffset=0x%llx).\n",
          len, (unsigned long long)dstOffset);
     logE("BUG: when Buffer.info.size=0x%llx\n",
          (unsigned long long)stage.info.size);
@@ -122,7 +188,7 @@ int UniformBuffer::copyAndKeepMmap(command::CommandPool& pool, const void* src,
   }
 
   if (!stageMmap) {
-    if (stage.mem.mmap(pool.dev, &stageMmap)) {
+    if (stage.mem.mmap(&stageMmap)) {
       logE("UniformBuffer::copyAndKeepMmap: stage.mem.mmap failed\n");
       return 1;
     }

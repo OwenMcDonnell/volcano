@@ -135,3 +135,5 @@ rem Everything else is built separately to have use_dynamic_crt = false.
 echo ninja -C out/Debug
 ninja -C out/Debug
 if errorlevel 1 goto :subcmd_failed
+
+:eof

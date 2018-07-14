@@ -25,7 +25,7 @@ source_set("skia") {
   public_configs = [ ":skia_public_config" ]
   sources = [ "skiaglue.cpp" ]
   deps = [
-    ":gli",
+    "gli",
     volcano_prefix + ":command",
     volcano_prefix + ":memory",
     volcano_prefix + ":science",
@@ -46,33 +46,4 @@ source_set("skia") {
       libs += [ "GL" ]
     }
   }
-}
-
-config("gli_config") {
-  include_dirs = [ volcano_prefix + "vendor/gli" ]
-  if (!is_win) {
-    cflags = [
-      "-Wno-strict-aliasing",
-      "-Wno-ignored-qualifiers",
-    ]
-  }
-  if (is_mac) {
-    cflags += [
-      "-Wno-sign-compare",
-      "-Wno-unused-parameter",
-      "-Wno-unused-variable",
-    ]
-  }
-  if (is_posix && !is_mac) {
-    cflags += [ "-Wno-unused-but-set-variable" ]
-  }
-}
-
-# gli is a header-only library, so all this does is make sure the right include
-# directories are added to the code that lists this as a dep.
-group("gli") {
-  public_configs = [
-    ":gli_config",
-    "//src/gn/vendor/vulkansamples:glm_config",
-  ]
 }

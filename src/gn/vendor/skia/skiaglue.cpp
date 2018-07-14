@@ -1,4 +1,4 @@
-/* Copyright (c) 2017 the Volcano Authors. Licensed under the GPLv3.
+/* Copyright (c) 2017-2018 the Volcano Authors. Licensed under the GPLv3.
  * Glue for loading an image using skia.
  */
 
@@ -22,9 +22,10 @@ static int getPixels(SkCodec& codec, void* mappedMem, uint32_t rowStride,
                      std::string& imgFilenameFound) {
   char msgbuf[256];
   const char* msg;
+  auto& info = codec.getInfo();
   auto r = codec.getPixels(
-      SkImageInfo::Make(codec.getInfo().width(), codec.getInfo().height(),
-                        kRGBA_8888_SkColorType, kPremul_SkAlphaType),
+      SkImageInfo::Make(info.width(), info.height(), kRGBA_8888_SkColorType,
+                        info.alphaType()),
       mappedMem, rowStride);
   switch (r) {
     case SkCodec::kSuccess:
@@ -67,10 +68,8 @@ static int getPixels(SkCodec& codec, void* mappedMem, uint32_t rowStride,
   return 1;
 }
 
-// loadImage loads imgFilename as a VK_FORMAT_R8G8B8A8_UNORM
-// image in stage (a Buffer). copy1 is set up for a later copy from stage to
-// an Image of your choosing. info is set up to create your Image.
-int skiaglue::loadImage(const char* imgFilename, memory::Buffer& stage) {
+int skiaglue::loadImage(const char* imgFilename, memory::Buffer& stage,
+                        memory::Image& img) {
   // findInPaths is defined in command.h.
   if (findInPaths(imgFilename, imgFilenameFound)) {
     return 1;
@@ -91,12 +90,12 @@ int skiaglue::loadImage(const char* imgFilename, memory::Buffer& stage) {
       logE("invalid dds: wrong format\n");
       return 1;
     }
-    info.mipLevels = tex.levels();
-    info.format = VK_FORMAT_R8G8B8A8_UNORM;
-    info.extent.width = tex.dimensions().x;
-    info.extent.height = tex.dimensions().y;
-    info.extent.depth = 1;
-    uint32_t formatBytes = FormatSize(info.format);
+    img.info.mipLevels = tex.levels();
+    img.info.format = VK_FORMAT_R8G8B8A8_UNORM;
+    img.info.extent.width = tex.dimensions().x;
+    img.info.extent.height = tex.dimensions().y;
+    img.info.extent.depth = 1;
+    uint32_t formatBytes = FormatSize(img.info.format);
 
     copies.resize(tex.levels());
     size_t readOfs = 0;
@@ -104,26 +103,27 @@ int skiaglue::loadImage(const char* imgFilename, memory::Buffer& stage) {
       VkBufferImageCopy& copy = copies.at(mip);
       memset(&copy, 0, sizeof(copy));
       copy.bufferOffset = readOfs;
-      copy.bufferRowLength = info.extent.width >> mip;
-      copy.bufferImageHeight = info.extent.height >> mip;
+      copy.bufferRowLength = img.info.extent.width >> mip;
+      copy.bufferImageHeight = img.info.extent.height >> mip;
       readOfs += formatBytes * copy.bufferRowLength * copy.bufferImageHeight;
-      science::Subres(copy.imageSubresource).addColor().setMipLevel(mip);
+      copy.imageSubresource = img.getSubresourceLayers(mip);
       copy.imageOffset = {0, 0, 0};
-      copy.imageExtent = {copy.bufferRowLength, copy.bufferImageHeight, 1};
+      copy.imageExtent = img.info.extent;
     }
 
     stage.info.size = tex.size();
-    if (stage.ctorHostCoherent(cpool.dev) || stage.bindMemory(cpool.dev)) {
+    if (stage.ctorHostCoherent() || stage.bindMemory()) {
       logE("stage.ctorHostCoherent or bindMemory failed\n");
       return 1;
     }
+
     void* mappedMem;
-    if (stage.mem.mmap(cpool.dev, &mappedMem)) {
+    if (stage.mem.mmap(&mappedMem)) {
       logE("stage.mmap() failed\n");
       return 1;
     }
     memcpy(mappedMem, tex.data<char>(), tex.size());
-    stage.mem.munmap(cpool.dev);
+    stage.mem.munmap();
     return 0;
   }
 
@@ -134,33 +134,33 @@ int skiaglue::loadImage(const char* imgFilename, memory::Buffer& stage) {
     return 1;
   }
   auto& dim = codec->getInfo();
-  info.extent.width = dim.width();
-  info.extent.height = dim.height();
-  info.extent.depth = 1;
-  info.format = VK_FORMAT_R8G8B8A8_UNORM;
+  img.info.extent.width = dim.width();
+  img.info.extent.height = dim.height();
+  img.info.extent.depth = 1;
+  img.info.format = VK_FORMAT_R8G8B8A8_UNORM;
 
   copies.resize(1);
   VkBufferImageCopy& copy = copies.at(0);
   memset(&copy, 0, sizeof(copy));
   copy.bufferRowLength = dim.width();
   copy.bufferImageHeight = dim.height();
-  copy.imageExtent = {uint32_t(dim.width()), uint32_t(dim.height()), 1};
-  science::Subres(copy.imageSubresource).addColor();
+  copy.imageExtent = img.info.extent;
+  copy.imageSubresource = img.getSubresourceLayers(0);
 
-  uint32_t rowStride = FormatSize(info.format) * copy.bufferRowLength;
+  uint32_t rowStride = FormatSize(img.info.format) * copy.bufferRowLength;
   stage.info.size = rowStride * dim.height();
-  if (stage.ctorHostCoherent(cpool.dev) || stage.bindMemory(cpool.dev)) {
+  if (stage.ctorHostCoherent() || stage.bindMemory()) {
     logE("stage.ctorHostCoherent or bindMemory failed\n");
     return 1;
   }
 
   void* mappedMem;
-  if (stage.mem.mmap(cpool.dev, &mappedMem)) {
+  if (stage.mem.mmap(&mappedMem)) {
     logE("stage.mem.mmap() failed\n");
     return 1;
   }
   int r = getPixels(*codec, mappedMem, rowStride, imgFilenameFound);
-  stage.mem.munmap(cpool.dev);
+  stage.mem.munmap();
   return r;
 }
 
@@ -197,7 +197,7 @@ int skiaglue::writePNG(memory::Image& image, std::string outFilename) {
     return 1;
   }
   char* mappedMem;
-  if (image.mem.mmap(cpool.dev, (void**)&mappedMem)) {
+  if (image.mem.mmap((void**)&mappedMem)) {
     logE("mmap() failed\n");
     return 1;
   }
@@ -205,7 +205,7 @@ int skiaglue::writePNG(memory::Image& image, std::string outFilename) {
   VkSubresourceLayout& layout = image.colorMem.at(0);
   int r = writePNGfromMappedMem(image, layout.rowPitch, outFilename.c_str(),
                                 mappedMem + layout.offset);
-  image.mem.munmap(cpool.dev);
+  image.mem.munmap();
   return r;
 }
 
@@ -238,35 +238,34 @@ int skiaglue::writeDDS(memory::Image& image, std::string outFilename) {
     c.bufferImageHeight = image.info.extent.height >> mip;
     c.imageExtent = {image.info.extent.width >> mip,
                      image.info.extent.height >> mip, 1};
-    science::Subres(c.imageSubresource).addColor().setMipLevel(mip);
+    c.imageSubresource = image.getSubresourceLayers(mip);
     offset +=
         FormatSize(image.info.format) * c.bufferRowLength * c.bufferImageHeight;
   }
 
   // offset now contains the total number of bytes.
   host.info.size = offset;
-  if (host.ctorHostCoherent(cpool.dev) || host.bindMemory(cpool.dev)) {
+  if (host.ctorHostCoherent() || host.bindMemory()) {
     logE("host.ctorHostCoherent or bindMemory failed\n");
     return 1;
   }
   {
     science::SmartCommandBuffer buffer{cpool, memory::ASSUME_POOL_QINDEX};
     if (buffer.ctorError() || buffer.autoSubmit() ||
-        buffer.transition(image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL) ||
-        buffer.copyImageToBuffer(image.vk, image.currentLayout, host.vk,
-                                 copies)) {
+        buffer.barrier(image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL) ||
+        buffer.copyImage(image, host, copies)) {
       logE("buffer failed\n");
       return 1;
     }
   }
 
   char* mappedMem;
-  if (host.mem.mmap(cpool.dev, (void**)&mappedMem)) {
+  if (host.mem.mmap((void**)&mappedMem)) {
     logE("host.mmap() failed\n");
     return 1;
   }
   int r = writeDDSfromMappedMem(image, mappedMem, host.info.size,
                                 outFilename.c_str());
-  host.mem.munmap(cpool.dev);
+  host.mem.munmap();
   return r;
 }

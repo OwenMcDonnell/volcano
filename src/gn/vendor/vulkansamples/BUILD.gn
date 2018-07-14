@@ -1,4 +1,4 @@
-# Copyright 2017 the Volcano Authors. All rights reserved.
+# Copyright 2017-2018 the Volcano Authors. All rights reserved.
 # Licensed under the GPL v3.
 import("//src/gn/toolchain/android/settings.gni")
 import("//src/gn/vendor/androidExecutable.gni")
@@ -66,23 +66,24 @@ template("lvl_genvk") {
 template("vk_layer") {
   forward_variables_from(invoker, [ "is_meta_layer" ])
   json_file_name = "VkLayer_" + target_name + ".json"
+  if (is_win) {
+    json_path = "layers/windows"
+  } else if (is_mac || is_ios || is_tvos) {
+    json_path = "layers/macos"
+  } else if (is_posix || is_linux || is_android) {
+    json_path = "layers/linux"
+  } else {
+    assert(false, "Unsupported OS")
+  }
 
   if (defined(is_meta_layer) && is_meta_layer) {
     copy("VkLayer_" + target_name) {
-      if (is_win) {
-        sources = [ "$lvl_path/layers/windows/$json_file_name" ]
-      } else {
-        sources = [ "$lvl_path/layers/linux/$json_file_name" ]
-      }
+      sources = [ "$lvl_path/$json_path/$json_file_name" ]
       outputs = [ vulkan_install_dir + "/explicit_layer.d/$json_file_name" ]
     }
   } else {
     copy(json_file_name) {
-      if (is_win) {
-        sources = [ "$lvl_path/layers/windows/$json_file_name" ]
-      } else {
-        sources = [ "$lvl_path/layers/linux/$json_file_name" ]
-      }
+      sources = [ "$lvl_path/$json_path/$json_file_name" ]
       outputs = [ vulkan_install_dir + "/explicit_layer.d/$json_file_name" ]
     }
 
@@ -93,6 +94,7 @@ template("vk_layer") {
       configs += [
         ":local_config_include_dir_loader",
         ":local_config_include_dir_layers",
+        ":vulkan_gen_include_dir",
         ":vulkan_local_config",
         ":vulkan_config",
       ]
@@ -110,11 +112,17 @@ template("vk_layer") {
         # functions to be exported from the DLL.
         def_file_name = "VkLayer_$target_name" + ".def"
         ldflags = [ "/def:" + rebase_path("$lvl_path/layers/$def_file_name") ]
-      } else if (is_mac) {
-        ldflags = [ "-Wl,-rpath,@loader_path/." ]
-      } else {
+      } else if (is_mac || is_ios || is_tvos) {
+        ldflags = [
+          # Set install name so that an executable can specify an -rpath
+          "-install_name", "@rpath/lib" + target_name + ".dylib",
+          "-Wl,-rpath,@loader_path/",
+        ]
+      } else if (is_posix || is_linux || is_android) {
         # TODO: maybe use configs += //src/gn/config/posix:executable_ldconfig.
         ldflags = [ "-Wl,-rpath=\$ORIGIN" ]
+      } else {
+        assert(false, "Unsupported OS")
       }
       deps += [
         ":VkLayer_utils",
@@ -193,6 +201,7 @@ config("vulkan_config") {
     include_dirs += [ lvl_path ]
   } else if (is_mac || is_ios || is_tvos) {
     defines = [ "VK_USE_PLATFORM_MACOS_MVK" ]
+    ldflags = [ "-Wl,-rpath,@loader_path/" ]
   } else {
     defines = []
     if (is_xcb_enabled) {
@@ -228,6 +237,22 @@ group("glm") {
   public_configs = [ ":glm_config" ]
 }
 
+config("vulkan_import_lib") {
+  ldflags = [ "vulkan-1.dll.lib" ]
+}
+
+config("vulkan_gen_include_dir") {
+  include_dirs = [ "$vk_gen_include_dir/vulkan" ]
+}
+
+config("local_config_include_dir_loader") {
+  include_dirs = [ "$lvl_path/loader" ]
+}
+
+config("local_config_include_dir_layers") {
+  include_dirs = [ "$lvl_path/layers" ]
+}
+
 # vk_format_utils.cpp is used inside validation layers but is also used by
 # outside code with volcano and volcanosamples.
 source_set("vk_format_utils") {
@@ -238,7 +263,8 @@ source_set("vk_format_utils") {
 
 action("vk_format_utils.h") {
   # grep.py is because on Android, include vulkan/vulkan.h breaks. VkPtr.h must
-  # be only place vulkan.h is included. Remove "include" from vk_format_utils.h
+  # be only place vulkan.h is included (using common/vulkan_platform.h).
+  # Remove "include" from vk_format_utils.h
   script = "//src/gn/vendor/vulkansamples/grep.py"
   inputs = [ "$lvl_path/layers/vk_format_utils.h" ]
   outputs = [ "$vk_gen_include_dir/vulkan/vk_format_utils.h" ]
@@ -246,68 +272,8 @@ action("vk_format_utils.h") {
     rebase_path("$lvl_path/layers/vk_format_utils.h"),
     rebase_path("$vk_gen_include_dir/vulkan/vk_format_utils.h"),
   ]
-  if (!is_android) {
-    deps = [ ":vulkan_headers" ]
-  }
+  deps = [ ":vulkan_headers" ]
 }
-
-#
-# Android support is pre-built by checking out github.com/LunarG/VulkanSamples
-# at the ndk_api version. (Abusing a single git checkout to reference different
-# commits is another option, estimated to be much more complex.)
-# NDK_DIR=$NDK_HOME/platforms/android-$NDK_API/arch-arm/usr/include/vulkan
-# cd VulkanSamples && git checkout 3859b21 && scripts/vk_helper.py \
-#                     --gen_enum_string_helper $NDK_DIR/vulkan.h
-#
-if (is_android) {
-
-config("android_native_app_glue_config") {
-  include_dirs = [ "$android_ndk_root/sources/android/native_app_glue" ]
-}
-
-config("android_native_app_glue_local_config") {
-  cflags = [
-    "-Wno-unused-parameter",
-    "-fvisibility=default",  # turn off //src/gn/config:symbol_visibility_hidden
-  ]
-}
-
-# android_native_app_glue is used by GLFWglue to compile
-# android_native_app_glue.c, required to create an android app without Java.
-source_set("android_native_app_glue") {
-  sources = [
-    android_ndk_root +
-      "/sources/android/native_app_glue/android_native_app_glue.c",
-  ]
-  all_dependent_configs = [ ":android_native_app_glue_config" ]
-  configs += [ ":android_native_app_glue_local_config" ]
-}
-
-source_set("vulkan") {
-  sources = [ "$lvl_path/common/vulkan_wrapper.cpp" ]
-  deps = [ ":android_vk_enum_string_helper.h" ]
-  public_configs = [ ":vulkan_config" ]
-}
-
-group("vulkansamples") {
-  deps = [ ":vulkan" ]
-  public_configs = [ ":vulkan_config" ]
-}
-
-copy("android_vk_enum_string_helper.h") {
-  sources = [
-    volcano_prefix + "vendor/android-ndk-$android_ndk_major_version" +
-    "/vk_enum_string_helper.h",
-  ]
-  outputs = [ "$vk_gen_include_dir/vulkan/{{source_file_part}}" ]
-}
-
-#
-# The rest of this BUILD.gn is for non-android targets.
-# AOSP vulkan implementation can be found here:
-# https://android.googlesource.com/platform/frameworks/native/+/master/vulkan
-#
-} else {
 
 lvl_genvk("vk_enum_string_helper.h") {}
 
@@ -338,15 +304,60 @@ copy("vulkan_headers") {
   if (is_win && !use_dynamic_crt) {
     all_dependent_configs = [ ":vulkan_import_lib" ]
   }
+  deps = [ ":vk_enum_string_helper.h" ]
 }
 
-config("vulkan_import_lib") {
-  ldflags = [ "vulkan-1.dll.lib" ]
+#
+# Android support
+#
+if (is_android) {
+
+config("android_native_app_glue_config") {
+  include_dirs = [
+    "$android_ndk_root/sources/android/native_app_glue",
+  ]
 }
+
+config("android_native_app_glue_local_config") {
+  cflags = [
+    "-Wno-unused-parameter",
+    "-fvisibility=default",  # turn off //src/gn/config:symbol_visibility_hidden
+  ]
+}
+
+# android_native_app_glue is used by GLFWglue to compile
+# android_native_app_glue.c, required to create an android app without Java.
+source_set("android_native_app_glue") {
+  sources = [
+    android_ndk_root +
+      "/sources/android/native_app_glue/android_native_app_glue.c",
+  ]
+  all_dependent_configs = [ ":android_native_app_glue_config" ]
+  configs += [ ":android_native_app_glue_local_config" ]
+}
+
+source_set("vulkan") {
+  sources = [ "$lvl_path/common/vulkan_wrapper.cpp" ]
+  public_configs = [ ":vulkan_config" ]
+  deps = [ ":vulkan_headers" ]
+}
+
+group("vulkansamples") {
+  deps = [ ":vulkan" ]
+  public_configs = [
+    ":vulkan_gen_include_dir",
+    ":vulkan_config",
+  ]
+}
+
+#
+# The rest of this BUILD.gn is for non-android targets.
+# AOSP vulkan implementation can be found here:
+# https://android.googlesource.com/platform/frameworks/native/+/master/vulkan
+#
+} else {
 
 config("vulkan_local_config") {
-  include_dirs = [ "$vk_gen_include_dir/vulkan" ]
-
   defines = [
     "API_NAME=\"Vulkan\"",
     "__STDC_FORMAT_MACROS", # vk_layer_logging.h:361:54: error: expected ')' before 'PRIx64'
@@ -378,7 +389,7 @@ config("vulkan_local_config") {
     if (posix_cflags[0] != "foo" && posix_dir_defines[0] != "foo") {
       # Silence error "Assignment had no effect"
     }
-  } else if (is_mac || is_ios) {
+  } else if (is_mac || is_ios || is_tvos) {
     cflags = posix_cflags
     cflags += [ "-Wno-typedef-redefinition" ]
     defines += posix_dir_defines
@@ -390,20 +401,21 @@ config("vulkan_local_config") {
   }
 }
 
-config("local_config_include_dir_loader") {
-  include_dirs = [ "$lvl_path/loader" ]
+# gn, for a cross-compile, spits out a target under the "host_$arch" dir.
+# gn also spits out a target under $root_out_dir for "native" builds.
+# ninja will barf with "two" rules that create the same file (due to gn's bug)
+vk_validation_error_messages = "vk_validation_error_messages.h"
+if (android_variants_dir != "") {
+  vk_validation_error_messages = "vk_validation_error_messages.h($host_toolchain)"
 }
-
-config("local_config_include_dir_layers") {
-  include_dirs = [ "$lvl_path/layers" ]
-}
-
-copy("vk_validation_error_messages.h") {
-  # scripts/parameter_validation_generator.py can only find the file in its "."
-  sources = [
-    "$lvl_path/layers/vk_validation_error_messages.h",
-  ]
-  outputs = [ "$root_build_dir/{{source_file_part}}" ]
+if (android_variants_dir == "" || current_toolchain == host_toolchain) {
+  copy("vk_validation_error_messages.h") {
+    # scripts/parameter_validation_generator.py can only find the file in its "."
+    sources = [
+      "$lvl_path/layers/vk_validation_error_messages.h",
+    ]
+    outputs = [ "$root_build_dir/{{source_file_part}}" ]
+  }
 }
 
 lvl_genvk("vk_loader_extensions.h") {
@@ -411,6 +423,22 @@ lvl_genvk("vk_loader_extensions.h") {
 }
 lvl_genvk("vk_loader_extensions.c") {
   vk_generator = "$lvl_path/scripts/loader_extension_generator.py"
+}
+
+# gn, for a cross-compile, spits out a target under the "host_$arch" dir.
+# gn also spits out a target under $root_out_dir for "native" builds.
+# ninja will barf with "two" rules that create the same file (due to gn's bug)
+generate_helper_files = "generate_helper_files"
+if (android_variants_dir != "" && current_os != target_os) {
+  generate_helper_files = "generate_helper_files($host_toolchain)"
+}
+group("generate_helper_files") {
+  deps = [
+    ":vulkan_headers",
+    ":vk_safe_struct.h",
+    ":vk_safe_struct.cpp",
+    ":vk_layer_dispatch_table.h",
+  ]
 }
 
 if (is_win && !use_dynamic_crt) {
@@ -482,7 +510,7 @@ if (is_win && !use_dynamic_crt) {
     }
 
     deps = [
-      ":generate_helper_files",
+      ":$generate_helper_files",
       ":vulkan_headers",
       ":vk_loader_extensions.h",
       ":vk_loader_extensions.c",
@@ -491,6 +519,7 @@ if (is_win && !use_dynamic_crt) {
     public_configs = [ ":vulkan_config" ]
     configs += [
       ":local_config_include_dir_loader",
+      ":vulkan_gen_include_dir",
       ":vulkan_local_config",
     ]
 
@@ -507,33 +536,25 @@ if (is_win && !use_dynamic_crt) {
       ldflags = [ "/def:" +
                   rebase_path("$lvl_path/loader/$target_name" +
                               "-$vulkan_api_major.def") ]
-    } else if (is_mac || is_ios) {
+    } else if (is_mac || is_ios || is_tvos) {
+      ldflags = [
+        # Set install name so that an executable can specify an -rpath
+        "-install_name", "@rpath/libvulkan.dylib",
+        "-Wl,-rpath,@loader_path/",
+      ]
       deps += [ ":MoltenVK_group" ]
-    } else {
+    } else if (is_posix || is_linux || is_android) {
       output_extension = "so.$vulkan_api_major"
+    } else {
+      assert(false, "Unsupported OS")
     }
   }
 }
 
-lvl_genvk("vk_struct_size_helper.h") {}
-lvl_genvk("vk_struct_size_helper.c") {}
 lvl_genvk("vk_safe_struct.h") {}
 lvl_genvk("vk_safe_struct.cpp") {}  #included in several layers/*.cpp files.
 lvl_genvk("vk_layer_dispatch_table.h") {
   vk_generator = "$lvl_path/scripts/loader_extension_generator.py"
-}
-
-
-group("generate_helper_files") {
-  deps = [
-    ":vulkan_headers",
-    ":vk_enum_string_helper.h",
-    ":vk_struct_size_helper.h",
-    ":vk_struct_size_helper.c",
-    ":vk_safe_struct.h",
-    ":vk_safe_struct.cpp",
-    ":vk_layer_dispatch_table.h",
-  ]
 }
 
 lvl_genvk("mock_icd.h") {
@@ -570,7 +591,7 @@ source_set("spirv_tools") {
   } else {
     lib = "libspirv-tools.a"
   }
-  libs = [ "$root_out_dir/skia/$lib" ]
+  libs = [ "$root_out_dir/$skiasubdir/$lib" ]
 }
 
 lvl_genvk("vk_typemap_helper.h") {}
@@ -578,7 +599,7 @@ lvl_genvk("vk_object_types.h") {}
 lvl_genvk("vk_extension_helper.h") {}
 vk_layer("core_validation") {
   deps = [
-    ":generate_helper_files",
+    ":$generate_helper_files",
     "../glslang:SPIRV",
     ":vk_object_types.h",
     ":vk_extension_helper.h",
@@ -599,7 +620,7 @@ vk_layer("core_validation") {
 lvl_genvk("object_tracker.cpp") {
   vk_generator = "$lvl_path/scripts/object_tracker_generator.py"
   vk_out_dir = target_gen_dir
-  deps = [ ":vk_validation_error_messages.h" ]
+  deps = [ ":$vk_validation_error_messages" ]
 }
 vk_layer("object_tracker") {
   sources = [
@@ -635,7 +656,7 @@ vk_layer("unique_objects") {
 lvl_genvk("parameter_validation.cpp") {
   vk_generator = "$lvl_path/scripts/parameter_validation_generator.py"
   vk_out_dir = target_gen_dir
-  deps = [ ":vk_validation_error_messages.h" ]
+  deps = [ ":$vk_validation_error_messages" ]
 }
 vk_layer("parameter_validation") {
   include_dirs = [ "$lvl_path/layers" ]
@@ -657,6 +678,7 @@ static_library("VkLayer_utils") {
   output_dir = vulkan_install_dir + "/explicit_layer.d"
   configs += [
     ":local_config_include_dir_loader",
+    ":vulkan_gen_include_dir",
     ":vulkan_local_config",
     ":vulkan_config",
   ]
@@ -669,7 +691,7 @@ static_library("VkLayer_utils") {
   ]
   deps = [
     ":vulkan_headers",
-    ":generate_helper_files",
+    ":$generate_helper_files",
     ":vk_dispatch_table_helper.h",
     ":vk_format_utils",
   ]
@@ -686,8 +708,20 @@ group("vulkan_layers") {
   ]
 }
 
+config("vulkaninfo_local_config") {
+  if (is_mac || is_ios) {
+    ldflags = [
+      "-framework", "AppKit",
+      "-framework", "QuartzCore",
+    ]
+    include_dirs = [ lvl_path + "/demos/macOS/vulkaninfo" ]
+  }
+}
+
 executable("vulkaninfo") {
   configs += [
+    ":vulkaninfo_local_config",
+    ":vulkan_gen_include_dir",
     ":vulkan_local_config",
     ":vulkan_config",
   ]
@@ -703,10 +737,14 @@ executable("vulkaninfo") {
     } else if (is_wayland_enabled) {
       assert(false, "TODO: add Wayland client libraries")
     }
+    if (is_mac || is_ios) {
+      sources += [ "$lvl_path/demos/macOS/vulkaninfo/metal_view.m" ]
+      deps += [ ":MoltenVK" ]
+    }
   } else if (is_win) {
     # Windows is its own window manager.
     # However, some system libraries must be explicitly listed.
-    deps = [ ":generate_helper_files" ]
+    deps = [ ":$generate_helper_files" ]
     libs = [
       "gdi32.lib",
       "user32.lib",
@@ -729,11 +767,28 @@ executable("vulkaninfo") {
 
 group("vulkansamples") {
   # Automatically build :vulkaninfo, though it might not be used.
-  deps = [ ":vulkaninfo" ]
+  deps = [
+    ":vulkaninfo",
+    ":$generate_helper_files",
+  ]
   if (!is_win) {
     deps += [ ":vulkan" ]
   }
-  public_configs = [ ":vulkan_config" ]
+  public_configs = [
+    ":vulkan_gen_include_dir",
+    ":vulkan_config",
+  ]
+}
+
+cereal_dir = "$vulkansamples/../cereal"
+config("cereal_config") {
+  include_dirs = [ "$cereal_dir/include" ]
+  defines = [
+    "CEREAL_THREAD_SAFE=1",
+  ]
+  libs = [
+    "pthread",
+  ]
 }
 
 if (is_mac || is_ios) {
@@ -781,6 +836,8 @@ if (is_mac || is_ios) {
   shared_library("MoltenVK") {
     configs += [
       ":moltenvk_local_config",
+      ":cereal_config",
+      ":vulkan_gen_include_dir",
       ":vulkan_local_config",
       ":vulkan_config",
       ":include_spirv_tools_from_skia",
@@ -796,6 +853,8 @@ if (is_mac || is_ios) {
       "c++",
     ]
     ldflags = [
+      # Set install name so that an executable can specify an -rpath
+      "-install_name", "@rpath/libMoltenVK.dylib",
       "-framework", "Metal",
       "-framework", "IOSurface",
       "-framework", "IOKit",

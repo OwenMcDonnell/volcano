@@ -22,70 +22,32 @@ VKAPI_ATTR VkBool32 VKAPI_CALL debugReportCallback(
 
 #if !defined(_MSC_VER) && !defined(__ANDROID__)
   // Suppress the most common log messages.
-  static uint64_t debugLineCount = 0;
-  static uint32_t suppressState = 0;
-  debugLineCount++;
-
   if (!strcmp(pLayerPrefix, "DebugReport")) {
-    if (!strcmp(pMsg, "Added callback")) {
+    if (strstr(pMsg, "Added callback")) {
       return false;
     }
-  } else if (!strcmp(pLayerPrefix, "loader")) {
+  } else if (!strcmp(pLayerPrefix, "Loader Message")) {
     /**
      * To view loader messages that are produced before Instance::initDebug(),
      * set VK_LOADER_DEBUG=all or VK_LOADER_DEBUG=error,warn,debug,...,info
      * (see g_loader_log_msgs in loader/loader.c)
      */
-    if (strstr(pMsg, "manifest file") && debugLineCount < 20) {
-      return false;
-    }
-    if (strstr(pMsg, VK_LAYER_LUNARG_standard_validation) &&
-        debugLineCount < 30) {
-      return false;
-    }
-    if (!strcmp(pMsg, "Build ICD instance extension list")) {
-      suppressState = 1;
-      return false;
-    }
-    if (suppressState == 1 && !strncmp(pMsg, "Instance Extension:", 19)) {
-      return false;
-    }
-    if (!strncmp(pMsg, "Searching for ICD drivers named", 31)) {
-      return false;
-    }
-    if (!strncmp(pMsg, "Chain: instance: Loading layer library", 38)) {
+    if (!strncmp(pMsg, "Loading layer library", 21)) {
       return false;
     }
     if (!strncmp(pMsg, "Device Extension: ", 18)) {
       return false;
     }
-    suppressState = 0;
-  } else if (!strcmp(pLayerPrefix, "ObjectTracker")) {
+  } else if (!strcmp(pLayerPrefix, "Validation")) {
     if (msgFlags &
         (VK_DEBUG_REPORT_DEBUG_BIT_EXT | VK_DEBUG_REPORT_INFORMATION_BIT_EXT)) {
-      return false;
-    }
-  } else if (!strcmp(pLayerPrefix, "MEM")) {
-    if (strstr(pMsg, "Details of") && msgCode == 0) {
-      suppressState = 2;
-      return false;
-    }
-    if (!strcmp(pMsg, "=============================") || suppressState == 2) {
-      return false;
-    }
-  } else if (!strcmp(pLayerPrefix, "DS")) {
-    if ((msgFlags & VK_DEBUG_REPORT_DEBUG_BIT_EXT) &&
-        !strncmp(pMsg, "vkCmdDraw()", 11)) {
-      suppressState = 3;
-      return false;
-    }
-    if (suppressState == 3 &&
-        (msgFlags & (VK_DEBUG_REPORT_DEBUG_BIT_EXT |
-                     VK_DEBUG_REPORT_INFORMATION_BIT_EXT)) != 0) {
+      // Suppress messages like:
+      // I Validation: code0: Object: 0x2 | OBJ[0x6] : CREATE CommandPool
+      // object 0x2 I ObjectTracker: code0: Object: 0x2 | OBJ_STAT Destroy
+      // CommandPool obj 0x2 ...
       return false;
     }
   }
-  suppressState = 0;
 #endif /* Suppress the most common log messages. */
 
   if (msgFlags & VK_DEBUG_REPORT_DEBUG_BIT_EXT) {
@@ -153,12 +115,48 @@ int Instance::initDebug() {
   return 0;
 }
 
-int dbg_lvl = 0;
-
 Instance::~Instance() {
   if (pDestroyDebugReportCallbackEXT) {
     pDestroyDebugReportCallbackEXT(vk, debugReport, pAllocator);
   }
+}
+
+uint32_t Device::apiVersionInUse() const { return inst->apiVersionInUse(); }
+
+void Device::apiUsage(int v1, int v2, int v3, bool pred, const char* fmt, ...) {
+  uint32_t v = apiVersionInUse();
+  if (VK_MAKE_VERSION(uint32_t(v1), uint32_t(v2), uint32_t(v3)) <= v || !pred) {
+    return;
+  }
+
+  logW("Vulkan %u.%u.%u found, but %d.%d.%d wanted for\n", VK_VERSION_MAJOR(v),
+       VK_VERSION_MINOR(v), VK_VERSION_PATCH(v), v1, v2, v3);
+  va_list ap;
+  va_start(ap, fmt);
+  logVolcano('W', fmt, ap);
+  va_end(ap);
+}
+
+void Device::extensionUsage(const char* name, bool pred, const char* fmt, ...) {
+  for (auto req : requiredExtensions) {
+    if (!strcmp(name, req)) {
+      return;
+    }
+  }
+  for (auto req : inst->requiredExtensions) {
+    if (req == name) {
+      return;
+    }
+  }
+  if (!pred) {
+    return;
+  }
+
+  logW("Extension \"%s\" needed for\n", name);
+  va_list ap;
+  va_start(ap, fmt);
+  logVolcano('W', fmt, ap);
+  va_end(ap);
 }
 
 }  // namespace language

@@ -109,7 +109,7 @@ int Pipeline::init(RenderPass& renderPass, size_t subpass_i) {
   //
   // Create pipelineLayout.
   //
-  pipelineLayout.reset();
+  pipelineLayout.reset(dev.dev);
   VkResult v = vkCreatePipelineLayout(dev.dev, &plci, nullptr, &pipelineLayout);
   if (v != VK_SUCCESS) {
     logE("%s failed: %d (%s)\n", "vkCreatePipelineLayout", v,
@@ -147,7 +147,7 @@ int Pipeline::init(RenderPass& renderPass, size_t subpass_i) {
   p.renderPass = renderPass.vk;
   p.subpass = subpass_i;
 
-  vk.reset();
+  vk.reset(dev.dev);
   v = vkCreateGraphicsPipelines(dev.dev, VK_NULL_HANDLE, 1, &p, nullptr, &vk);
   if (v != VK_SUCCESS) {
     logE("%s failed: %d (%s)\n", "vkCreateGraphicsPipelines", v,

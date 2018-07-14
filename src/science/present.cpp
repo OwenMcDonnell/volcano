@@ -7,11 +7,13 @@ namespace science {
 CommandPoolContainer::~CommandPoolContainer(){};
 
 int CommandPoolContainer::acquireNextImage(
-    uint32_t* next_image_i, command::Semaphore& imageAvailableSemaphore,
+    uint32_t frameNumber, uint32_t* next_image_i,
+    command::Semaphore& imageAvailableSemaphore,
     uint64_t timeout /*= std::numeric_limits<uint64_t>::max()*/,
     VkFence fence /*= VK_NULL_HANDLE*/,
     size_t poolQindex /*= memory::ASSUME_POOL_QINDEX*/) {
   auto& dev = cpool.dev;
+  dev.setFrameNumber(frameNumber);
   VkResult result =
       vkAcquireNextImageKHR(dev.dev, dev.swapChain, timeout,
                             imageAvailableSemaphore.vk, fence, next_image_i);

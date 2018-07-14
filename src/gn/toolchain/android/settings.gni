@@ -8,9 +8,10 @@ declare_args() {
   android_sdk = "//"
   android_sdk_version = "24"
   android_sdk_build_tools_version = "24.0.2"
-  android_variants_dir = ""
 }
-assert(!is_android || android_sdk != "//", "android_sdk must be provided")
+# android_variants_dir indicates the target dir to build in
+assert(android_variants_dir == "" || android_sdk != "//",
+       "android_sdk must be provided")
 
 declare_args() {
   # Declare android_ndk_major_version in declare_args so you can override it.
@@ -65,7 +66,7 @@ if (host_os == "linux") {
 # than just the current one) since these are needed by the Android toolchain
 # file to define toolchains for all possible targets in one pass.
 
-android_sdk_platform = "${android_sdk}/platforms/android-${android_sdk_version}"
+android_sdk_platform = "$android_sdk/platforms/android-${android_sdk_version}"
 
 if (defined(android_ndk_root)) {
   if (android_ndk_major_version == 0) {
@@ -78,6 +79,8 @@ if (defined(android_ndk_root)) {
 
   # Path to the Android NDK and SDK.
   android_ndk_include_dir = "$android_ndk_root/usr/include"
+  android_ndk_platform_arch = "$android_ndk_root/platforms/" +
+      "android-$android_sdk_version/arch-"
 
   android_sdk_tools = "${android_sdk}/tools"
   android_sdk_build_tools =
@@ -90,75 +93,90 @@ if (defined(android_ndk_root)) {
 
   # Subdirectories inside android_ndk_root that contain the sysroot for the
   # associated platform.
-  # If you raise this, reevaluate the snprintf=snprintf in ./BUILD.gn.
-  _android_api_level = 24
-  x86_android_sysroot_subdir = "platforms/android-${_android_api_level}/arch-x86"
-  arm_android_sysroot_subdir = "platforms/android-${_android_api_level}/arch-arm"
-  mips_android_sysroot_subdir =
-      "platforms/android-${_android_api_level}/arch-mips"
+  if (android_ndk_major_version < 16) {
+    # If you raise this, reevaluate the snprintf=snprintf in ./BUILD.gn.
+    _android_api_level = 24
+    # If you raise this, reevaluate the snprintf=snprintf in ./BUILD.gn.
+    _android64_api_level = 24
 
-  # If you raise this, reevaluate the snprintf=snprintf in ./BUILD.gn.
-  _android64_api_level = 24
-  x86_64_android_sysroot_subdir =
-      "platforms/android-${_android64_api_level}/arch-x86_64"
-  arm64_android_sysroot_subdir =
-      "platforms/android-${_android64_api_level}/arch-arm64"
-  mips64_android_sysroot_subdir =
-      "platforms/android-${_android64_api_level}/arch-mips64"
+    _sysroot_base = "platforms/android-${_android_api_level}"
+    _sysroot64_base = "platforms/android-${_android64_api_level}"
+    x86_android_sysroot_subdir = "$_sysroot_base/arch-x86"
+    arm_android_sysroot_subdir = "$_sysroot_base/arch-arm"
+    mips_android_sysroot_subdir = "$_sysroot_base/arch-mips"
+
+    x86_64_android_sysroot_subdir = "$_sysroot64_base/arch-x86_64"
+    arm64_android_sysroot_subdir = "$_sysroot64_base/arch-arm64"
+    mips64_android_sysroot_subdir = "$_sysroot64_base/arch-mips64"
+  } else {
+    # NDK16 and newer have a single sysroot for all arch
+    _sysroot_base = "sysroot"
+    _sysroot64_base = "sysroot"
+
+    x86_android_sysroot_subdir = "$_sysroot_base"
+    arm_android_sysroot_subdir = "$_sysroot_base"
+    mips_android_sysroot_subdir = "$_sysroot_base"
+
+    x86_64_android_sysroot_subdir = "$_sysroot64_base"
+    arm64_android_sysroot_subdir = "$_sysroot64_base"
+    mips64_android_sysroot_subdir = "$_sysroot64_base"
+  }
 
   # Toolchain root directory for each build. The actual binaries are inside
-  # a "bin" directory inside of these.
-  _android_toolchain_version = "4.9"
-  _android_toolchain_detailed_version = "4.9.x"
-  x86_android_toolchain_root = "$android_ndk_root/toolchains/x86-${_android_toolchain_version}/prebuilt/${android_host_os}-${android_host_arch}"
-  arm_android_toolchain_root = "$android_ndk_root/toolchains/arm-linux-androideabi-${_android_toolchain_version}/prebuilt/${android_host_os}-${android_host_arch}"
-  mips_android_toolchain_root = "$android_ndk_root/toolchains/mipsel-linux-android-${_android_toolchain_version}/prebuilt/${android_host_os}-${android_host_arch}"
-  x86_64_android_toolchain_root = "$android_ndk_root/toolchains/x86_64-${_android_toolchain_version}/prebuilt/${android_host_os}-${android_host_arch}"
-  arm64_android_toolchain_root = "$android_ndk_root/toolchains/aarch64-linux-android-${_android_toolchain_version}/prebuilt/${android_host_os}-${android_host_arch}"
-  mips64_android_toolchain_root = "$android_ndk_root/toolchains/mips64el-linux-android-${_android_toolchain_version}/prebuilt/${android_host_os}-${android_host_arch}"
+  # a "bin" directory inside of these. Define variables for both clang and gcc.
+
+  android_clang_toolchain_root = android_ndk_root +
+      "/toolchains/llvm/prebuilt/${android_host_os}-${android_host_arch}"
+
+  android_toolchain_version = "4.9"
+  android_toolchain_detailed_version = "4.9.x"
+  _prebuilt = "-${android_toolchain_version}/prebuilt/"
+  _prebuilt += "${android_host_os}-${android_host_arch}"
+  x86_android_toolchain_root = "$android_ndk_root/toolchains/x86$_prebuilt"
+  arm_android_toolchain_root = "$android_ndk_root/toolchains/arm-linux-androideabi$_prebuilt"
+  mips_android_toolchain_root = "$android_ndk_root/toolchains/mipsel-linux-android$_prebuilt"
+  x86_64_android_toolchain_root = "$android_ndk_root/toolchains/x86_64$_prebuilt"
+  arm64_android_toolchain_root = "$android_ndk_root/toolchains/aarch64-linux-android$_prebuilt"
+  mips64_android_toolchain_root = "$android_ndk_root/toolchains/mips64el-linux-android$_prebuilt"
 
   # Location of libgcc. This is only needed for the current GN toolchain, so we
   # only need to define the current one, rather than one for every platform
   # like the toolchain roots.
   if (current_cpu == "x86") {
     android_prebuilt_arch = "android-x86"
-    _binary_prefix = "i686-linux-android"
+    _binary_prefix = "i686-linux-android-"
     android_toolchain_root = "$x86_android_toolchain_root"
-    android_libgcc_file = "$android_toolchain_root/lib/gcc/i686-linux-android/${_android_toolchain_detailed_version}/libgcc.a"
+    android_libgcc_file = "$android_toolchain_root/lib/gcc/i686-linux-android/${android_toolchain_detailed_version}/libgcc.a"
   } else if (current_cpu == "arm") {
     android_prebuilt_arch = "android-arm"
-    _binary_prefix = "arm-linux-androideabi"
+    _binary_prefix = "arm-linux-androideabi-"
     android_toolchain_root = "$arm_android_toolchain_root"
-    android_libgcc_file = "$android_toolchain_root/lib/gcc/arm-linux-androideabi/${_android_toolchain_detailed_version}/libgcc.a"
+    android_libgcc_file = "$android_toolchain_root/lib/gcc/arm-linux-androideabi/${android_toolchain_detailed_version}/libgcc.a"
   } else if (current_cpu == "mipsel") {
     android_prebuilt_arch = "android-mips"
-    _binary_prefix = "mipsel-linux-android"
+    _binary_prefix = "mipsel-linux-android-"
     android_toolchain_root = "$mips_android_toolchain_root"
-    android_libgcc_file = "$android_toolchain_root/lib/gcc/mipsel-linux-android/${_android_toolchain_detailed_version}/libgcc.a"
+    android_libgcc_file = "$android_toolchain_root/lib/gcc/mipsel-linux-android/${android_toolchain_detailed_version}/libgcc.a"
   } else if (current_cpu == "x64") {
     android_prebuilt_arch = "android-x86_64"
-    _binary_prefix = "x86_64-linux-android"
+    _binary_prefix = "x86_64-linux-android-"
     android_toolchain_root = "$x86_64_android_toolchain_root"
-    android_libgcc_file = "$android_toolchain_root/lib/gcc/x86_64-linux-android/${_android_toolchain_detailed_version}/libgcc.a"
+    android_libgcc_file = "$android_toolchain_root/lib/gcc/x86_64-linux-android/${android_toolchain_detailed_version}/libgcc.a"
   } else if (current_cpu == "arm64") {
     android_prebuilt_arch = "android-arm64"
-    _binary_prefix = "aarch64-linux-android"
+    _binary_prefix = "aarch64-linux-android-"
     android_toolchain_root = "$arm64_android_toolchain_root"
-    android_libgcc_file = "$android_toolchain_root/lib/gcc/aarch64-linux-android/${_android_toolchain_detailed_version}/libgcc.a"
+    android_libgcc_file = "$android_toolchain_root/lib/gcc/aarch64-linux-android/${android_toolchain_detailed_version}/libgcc.a"
   } else if (current_cpu == "mips64el") {
     android_prebuilt_arch = "android-mips64"
-    _binary_prefix = "mips64el-linux-android"
+    _binary_prefix = "mips64el-linux-android-"
     android_toolchain_root = "$mips64_android_toolchain_root"
-    android_libgcc_file = "$android_toolchain_root/lib/gcc/mips64el-linux-android/${_android_toolchain_detailed_version}/libgcc.a"
+    android_libgcc_file = "$android_toolchain_root/lib/gcc/mips64el-linux-android/${android_toolchain_detailed_version}/libgcc.a"
   } else {
     assert(false, "Need android libgcc support for your target arch.")
   }
 
-  android_tool_prefix = "$android_toolchain_root/bin/$_binary_prefix-"
-  android_readelf = "${android_tool_prefix}readelf"
-  android_objcopy = "${android_tool_prefix}objcopy"
-  android_gdbserver =
-      "$android_ndk_root/prebuilt/$android_prebuilt_arch/gdbserver/gdbserver"
+  android_tool_prefix = "$android_toolchain_root/bin/$_binary_prefix"
 
   # Toolchain stuff ------------------------------------------------------------
 

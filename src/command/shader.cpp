@@ -6,11 +6,13 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <sys/types.h>
-#if defined(__GLIBC__) || defined(__APPLE__)
+#if defined(__GLIBC__) || defined(__ANDROID__) || defined(__APPLE__)
 #include <sys/mman.h>
 #include <unistd.h>
 #elif defined(_WIN32)
 #include <io.h>
+#else
+#error Unsupported platform
 #endif
 
 namespace command {
@@ -45,7 +47,7 @@ int Shader::loadSPV(const char* filename) {
          strerror(errno));
     return 1;
   }
-#if defined(__GLIBC__) || defined(__APPLE__)
+#if defined(__GLIBC__) || defined(__ANDROID__) || defined(__APPLE__)
   char* map =
       (char*)mmap(0, s.st_size, PROT_READ, MAP_SHARED, infile, 0 /*offset*/);
 #else
@@ -59,12 +61,13 @@ int Shader::loadSPV(const char* filename) {
   }
 
   int r = loadSPV(map, map + s.st_size);
-#if defined(__GLIBC__) || defined(__APPLE__)
-  if (munmap(map, s.st_size) < 0) {
+#if defined(__GLIBC__) || defined(__ANDROID__) || defined(__APPLE__)
+  if (munmap(map, s.st_size) < 0)
 #else
   logF("This platform does not support mmap.\n");
-  if (1) {
+  if (1)
 #endif
+  {
     logE("loadSPV: munmap(%s) failed: %d %s\n", filename, errno,
          strerror(errno));
     close(infile);

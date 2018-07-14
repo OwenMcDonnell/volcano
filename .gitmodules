@@ -24,3 +24,7 @@
 	path = vendor/gli
 	url = https://github.com/g-truc/gli
 	ignore = dirty
+[submodule "vendor/cereal"]
+	path = vendor/cereal
+	url = https://github.com/USCiLab/cereal
+	ignore = dirty

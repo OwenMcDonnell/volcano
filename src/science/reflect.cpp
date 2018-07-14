@@ -52,15 +52,11 @@ static inline void print_resource(spirv_cross::CompilerGLSL& compiler,
   auto sc = compiler.get_storage_class(res.id);
   fprintf(stderr, "\n  id=%u storage_class=%u (%s)", res.id, (unsigned)sc,
           string_StorageClass(sc));
-  auto mask = compiler.get_decoration_mask(res.id);
-  uint32_t dec = 0;
-  for (uint64_t i = 1; i && i <= mask; i <<= 1, dec++) {
-    if (mask & i) {
-      spv::Decoration d = (decltype(d))dec;
-      uint32_t v = compiler.get_decoration(res.id, d);
-      fprintf(stderr, " %s=%u", string_Decoration(d), v);
-    }
-  }
+  compiler.get_decoration_bitset(res.id).for_each_bit([&](uint32_t dec) {
+    spv::Decoration d = (decltype(d))dec;
+    uint32_t v = compiler.get_decoration(res.id, d);
+    fprintf(stderr, " %s=%u", string_Decoration(d), v);
+  });
   fprintf(stderr, "\n  name=\"%s\"\n", res.name.c_str());
 }
 
@@ -139,8 +135,8 @@ struct ShaderLibraryInternal {
                       ResourceTypeMap& rtm) {
     for (auto& res : rtm.resources) {
       uint32_t setI = 0;
-      auto mask = compiler.get_decoration_mask(res.id);
-      if (mask & (((uint64_t)1) << spv::DecorationDescriptorSet)) {
+      auto bitset = compiler.get_decoration_bitset(res.id);
+      if (bitset.get(spv::DecorationDescriptorSet)) {
         setI = compiler.get_decoration(res.id, spv::DecorationDescriptorSet);
       }
       if (bindings.size() < setI + 1) {
@@ -151,7 +147,7 @@ struct ShaderLibraryInternal {
       binding.allStageBits |= stageBits;
 
       uint32_t bindingI = 0;
-      if (mask & (((uint64_t)1) << spv::DecorationBinding)) {
+      if (bitset.get(spv::DecorationBinding)) {
         bindingI = compiler.get_decoration(res.id, spv::DecorationBinding);
       } else {
         logW("WARNING: shader at stage %s:\n",

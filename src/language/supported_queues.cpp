@@ -10,74 +10,144 @@
 namespace language {
 using namespace VkEnum;
 
-VkResult Instance::initSupportedQueues(
-    Device& dev, std::vector<VkQueueFamilyProperties>& vkQFams) {
-  VkPhysicalDeviceFeatures VkInit(physDevFeatures);
-  vkGetPhysicalDeviceFeatures(dev.phys, &physDevFeatures);
+void QueueFamilyProperties::reset() { VkOverwrite(*this); }
 
-// Check Instance::features and enable if physDevFeatures supports it also.
-#define ENABLE_IF_SUPPORTED(x) \
-  dev.enabledFeatures.x = (features.x) && (physDevFeatures.x);
-  ENABLE_IF_SUPPORTED(robustBufferAccess);
-  ENABLE_IF_SUPPORTED(fullDrawIndexUint32);
-  ENABLE_IF_SUPPORTED(imageCubeArray);
-  ENABLE_IF_SUPPORTED(independentBlend);
-  ENABLE_IF_SUPPORTED(geometryShader);
-  ENABLE_IF_SUPPORTED(tessellationShader);
-  ENABLE_IF_SUPPORTED(sampleRateShading);
-  ENABLE_IF_SUPPORTED(dualSrcBlend);
-  ENABLE_IF_SUPPORTED(logicOp);
-  ENABLE_IF_SUPPORTED(multiDrawIndirect);
-  ENABLE_IF_SUPPORTED(drawIndirectFirstInstance);
-  ENABLE_IF_SUPPORTED(depthClamp);
-  ENABLE_IF_SUPPORTED(depthBiasClamp);
-  ENABLE_IF_SUPPORTED(fillModeNonSolid);
-  ENABLE_IF_SUPPORTED(depthBounds);
-  ENABLE_IF_SUPPORTED(wideLines);
-  ENABLE_IF_SUPPORTED(largePoints);
-  ENABLE_IF_SUPPORTED(alphaToOne);
-  ENABLE_IF_SUPPORTED(multiViewport);
-  ENABLE_IF_SUPPORTED(samplerAnisotropy);
-  ENABLE_IF_SUPPORTED(textureCompressionETC2);
-  ENABLE_IF_SUPPORTED(textureCompressionASTC_LDR);
-  ENABLE_IF_SUPPORTED(textureCompressionBC);
-  ENABLE_IF_SUPPORTED(occlusionQueryPrecise);
-  ENABLE_IF_SUPPORTED(pipelineStatisticsQuery);
-  ENABLE_IF_SUPPORTED(vertexPipelineStoresAndAtomics);
-  ENABLE_IF_SUPPORTED(fragmentStoresAndAtomics);
-  ENABLE_IF_SUPPORTED(shaderTessellationAndGeometryPointSize);
-  ENABLE_IF_SUPPORTED(shaderImageGatherExtended);
-  ENABLE_IF_SUPPORTED(shaderStorageImageExtendedFormats);
-  ENABLE_IF_SUPPORTED(shaderStorageImageMultisample);
-  ENABLE_IF_SUPPORTED(shaderStorageImageReadWithoutFormat);
-  ENABLE_IF_SUPPORTED(shaderStorageImageWriteWithoutFormat);
-  ENABLE_IF_SUPPORTED(shaderUniformBufferArrayDynamicIndexing);
-  ENABLE_IF_SUPPORTED(shaderSampledImageArrayDynamicIndexing);
-  ENABLE_IF_SUPPORTED(shaderStorageBufferArrayDynamicIndexing);
-  ENABLE_IF_SUPPORTED(shaderStorageImageArrayDynamicIndexing);
-  ENABLE_IF_SUPPORTED(shaderClipDistance);
-  ENABLE_IF_SUPPORTED(shaderCullDistance);
-  ENABLE_IF_SUPPORTED(shaderFloat64);
-  ENABLE_IF_SUPPORTED(shaderInt64);
-  ENABLE_IF_SUPPORTED(shaderInt16);
-  ENABLE_IF_SUPPORTED(shaderResourceResidency);
-  ENABLE_IF_SUPPORTED(shaderResourceMinLod);
-  ENABLE_IF_SUPPORTED(sparseBinding);
-  ENABLE_IF_SUPPORTED(sparseResidencyBuffer);
-  ENABLE_IF_SUPPORTED(sparseResidencyImage2D);
-  ENABLE_IF_SUPPORTED(sparseResidencyImage3D);
-  ENABLE_IF_SUPPORTED(sparseResidency2Samples);
-  ENABLE_IF_SUPPORTED(sparseResidency4Samples);
-  ENABLE_IF_SUPPORTED(sparseResidency8Samples);
-  ENABLE_IF_SUPPORTED(sparseResidency16Samples);
-  ENABLE_IF_SUPPORTED(sparseResidencyAliased);
-  ENABLE_IF_SUPPORTED(variableMultisampleRate);
-  ENABLE_IF_SUPPORTED(inheritedQueries);
-#undef ENABLE_IF_SUPPORTED
+enum templGetStages {
+  BEFORE_ENUM = 0,
+  AFTER_ENUM,
+};
 
-  VkBool32 oneQueueWithPresentSupported = false;
-  for (size_t q_i = 0; q_i < vkQFams.size(); q_i++) {
-    VkBool32 isPresentSupported = false;
+template <typename T>
+static int templGetQueueFamilies(
+    Device& dev, void(VKAPI_PTR* enumFn)(VkPhysicalDevice, uint32_t*, T*),
+    const char* enumFnName,
+    int (*mapFn)(Device&, templGetStages, std::vector<T>&)) {
+  uint32_t qCount = 0;
+  enumFn(dev.phys, &qCount, nullptr);
+  if (!qCount) {
+    logE("%s returned count=0, expected at least 1 queue\n", enumFnName);
+    return 1;
+  }
+
+  std::vector<T> qfp(qCount);
+  if (mapFn(dev, BEFORE_ENUM, qfp)) {
+    return 1;
+  }
+  enumFn(dev.phys, &qCount, qfp.data());
+  if (qCount > qfp.size()) {
+    // This can happen if a queue family was added between the two calls.
+    logF("%s returned count=%u, larger than previously (%zu)\n", enumFnName,
+         qCount, qfp.size());
+    return 1;
+  }
+  return mapFn(dev, AFTER_ENUM, qfp);
+}
+
+static int mapQueueFamiliyProperties(Device& dev, templGetStages stage,
+                                     std::vector<VkQueueFamilyProperties>& v) {
+  if (stage == BEFORE_ENUM) {
+    return 0;
+  }
+  dev.qfams.clear();
+  dev.qfams.resize(v.size());
+  for (size_t i = 0; i < v.size(); i++) {
+    dev.qfams.at(i).queueFamilyProperties = v.at(i);
+  }
+  v.clear();
+  return 0;
+}
+
+#if VK_HEADER_VERSION != 74
+/* Fix the excessive #ifndef __ANDROID__ below to just use the Android Loader
+ * once KhronosGroup lands support. */
+#error KhronosGroup update detected, splits Vulkan-LoaderAndValidationLayers
+#endif
+#ifndef __ANDROID__
+static int mapQueueFamiliyProperties2(
+    Device& dev, templGetStages stage,
+    std::vector<VkQueueFamilyProperties2>& v) {
+  if (stage == BEFORE_ENUM) {
+    // Reserved for if any pNext needs to be set up before enumFn is called.
+    return 0;
+  }
+  dev.qfams.clear();
+  dev.qfams.resize(v.size());
+  for (size_t i = 0; i < v.size(); i++) {
+    *static_cast<VkQueueFamilyProperties2*>(&dev.qfams.at(i)) = v.at(i);
+  }
+  v.clear();
+  return 0;
+}
+#endif /* __ANDROID__ */
+
+static int getQueueFamilies(Device& dev) {
+#ifndef __ANDROID__
+  if (dev.apiVersionInUse() < VK_MAKE_VERSION(1, 1, 0)) {
+#endif
+    return templGetQueueFamilies<VkQueueFamilyProperties>(
+        dev, vkGetPhysicalDeviceQueueFamilyProperties,
+        "vkGetPhysicalDeviceQueueFamilyProperties", mapQueueFamiliyProperties);
+#ifndef __ANDROID__
+  } else {
+    return templGetQueueFamilies<VkQueueFamilyProperties2>(
+        dev, vkGetPhysicalDeviceQueueFamilyProperties2,
+        "vkGetPhysicalDeviceQueueFamilyProperties2",
+        mapQueueFamiliyProperties2);
+  }
+#endif /* __ANDROID__ */
+}
+
+VkResult Instance::initSupportedQueues(Device& dev) {
+  if (dev.physProp.properties.apiVersion < minApiVersion) {
+    // Devices are excluded if they do not support minApiVersion
+    return VK_INCOMPLETE;
+  }
+
+  if (dev.availableFeatures.getFeatures(dev)) {
+    logE("initSupportedQueues: availableFeatures.getFeatures failed.\n");
+    return VK_ERROR_INITIALIZATION_FAILED;
+  }
+
+  // Attempt to enable, if supported, features supported by all the below.
+  // NOTE: textureCompression features are not supported by all devices, but
+  // some are supported by any one device; the app must choose a supported one:
+  // * Adreno 330 driver 26.24.512, android 7.0.
+  // * Radeon R7 200 driver 1.4.0, ubuntu 16.04 x86_64.
+  // * GeForce 840M driver 378.13.0.0, arch x86_64.
+  for (auto name : std::vector<const char*>{
+           "inheritedQueries",
+           "robustBufferAccess",
+           "samplerAnisotropy",
+           "occlusionQueryPrecise",
+           "textureCompressionETC2",
+           "textureCompressionASTC_LDR",
+           "textureCompressionBC",
+       }) {
+    if (dev.enabledFeatures.set(name, VK_TRUE)) {
+      logE("initSupportedQueues: failed to set widely-supported features\n");
+      return VK_ERROR_INITIALIZATION_FAILED;
+    }
+  }
+
+  if (getQueueFamilies(dev)) {
+    logE("Instance::ctorError: getQueueFamilies failed\n");
+    return VK_ERROR_INITIALIZATION_FAILED;
+  }
+
+  bool oneQueueWithPresentSupported = false;
+  for (size_t q_i = 0; q_i < dev.qfams.size(); q_i++) {
+    auto& queueFlags = dev.qfams.at(q_i).queueFamilyProperties.queueFlags;
+    if (queueFlags & (VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT)) {
+      // Per the vulkan spec for VkQueueFlagBits, GRAPHICS or COMPUTE always
+      // imply TRANSFER and TRANSFER does not even have to be reported in that
+      // case.
+      //
+      // In order to make life simple, set TRANSFER if TRANSFER is supported.
+      queueFlags |= VK_QUEUE_TRANSFER_BIT;
+    }
+
+    VkBool32 isPresentSupported = VK_FALSE;
+    dev.qfams.at(q_i).setSurfaceSupport(NONE);
     if (dev.swapChainInfo.surface) {
       // Probe VkPhysicalDevice for surface support.
       VkResult v = vkGetPhysicalDeviceSurfaceSupportKHR(
@@ -87,15 +157,16 @@ VkResult Instance::initSupportedQueues(
              "vkGetPhysicalDeviceSurfaceSupportKHR", v, string_VkResult(v));
         return VK_ERROR_INITIALIZATION_FAILED;
       }
-      oneQueueWithPresentSupported |= isPresentSupported;
+      if (isPresentSupported) {
+        oneQueueWithPresentSupported = true;
+        dev.qfams.at(q_i).setSurfaceSupport(PRESENT);
+      }
     }
-
-    dev.qfams.emplace_back(vkQFams.at(q_i),
-                           isPresentSupported ? PRESENT : NONE);
   }
 
   auto* devExtensions = Vk::getDeviceExtensions(dev.phys);
   if (!devExtensions) {
+    logE("Instance::ctorError: getDeviceExtensions failed\n");
     return VK_ERROR_INITIALIZATION_FAILED;
   }
   dev.availableExtensions = *devExtensions;
@@ -119,7 +190,7 @@ VkResult Instance::initSupportedQueues(
     for (j = 0; j < dev.availableExtensions.size(); j++) {
       if (!strcmp(dev.availableExtensions.at(j).extensionName,
                   deviceWithPresentRequiredExts[i])) {
-        dev.extensionRequests.push_back(deviceWithPresentRequiredExts[i]);
+        dev.requiredExtensions.push_back(deviceWithPresentRequiredExts[i]);
         break;
       }
     }

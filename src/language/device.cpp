@@ -117,18 +117,26 @@ int Device::initSurfaceFormatAndPresentMode() {
     return 1;
   }
 #ifdef _WIN32
-  if (swapChainInfo.presentMode == VK_PRESENT_MODE_MAILBOX_KHR &&
-      physProp.vendorID == 0x10de /* NVIDIA PCI device ID */) {
+  if (physProp.properties.vendorID == 0x1002 &&
+      physProp.properties.deviceID == 0x67B9) {
+    logW("WARNING: AMD 295x2 cards may be buggy.\n");
+    logW("https://www.reddit.com/r/vulkan/comments/8x8ry9/\n");
+  } else if (swapChainInfo.presentMode == VK_PRESENT_MODE_MAILBOX_KHR &&
+             physProp.properties.vendorID ==
+                 0x10de /* NVIDIA PCI device ID */) {
     logW("WARNING: PRESENT_MODE_MAILBOX chosen, %s\n",
          "NVidia fullscreen has bad tearing!");
+  }
+#endif
+#ifdef __ANDROID__
+  if (apiVersionInUse() < VK_MAKE_VERSION(1, 0, 0)) {
+    logF("Pre-1.0 Vulkan, cannot use. https://youtu.be/Aeo62YzofGc?t=25m48s");
   }
 #endif
   return 0;
 }
 
 Device::Device(VkSurfaceKHR surface) {
-  VkOverwrite(enabledFeatures);
-
   VkOverwrite(swapChainInfo);
   swapChainInfo.surface = surface;
   swapChainInfo.imageArrayLayers = 1;  // e.g. 2 is for stereo displays.

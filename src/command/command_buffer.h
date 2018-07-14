@@ -11,6 +11,11 @@
 
 #pragma once
 
+namespace memory {
+// Forward declaration of Buffer for CommandBuffer.
+typedef struct Buffer Buffer;
+}  // namespace memory
+
 namespace command {
 
 // CommandBuffer holds a VkCommandBuffer, and provides helpful utility methods
@@ -30,11 +35,19 @@ class CommandBuffer {
   // trimDstStage modifies access bits that are not supported by stage.
   void trimDstStage(VkAccessFlags& access, VkPipelineStageFlags& stage);
 
+  // validateLazyBarriers is called by flushLazyBarriers.
+  WARN_UNUSED_RESULT int validateLazyBarriers(CommandPool::lock_guard_t& lock);
+
+  // flushLazyBarriers needs to be called with the lock held, hence it is passed
+  // in (but never used).
+  WARN_UNUSED_RESULT int flushLazyBarriers(CommandPool::lock_guard_t& lock);
+
  public:
   // This form of constructor creates an empty CommandBuffer.
   CommandBuffer(CommandPool& cpool_) : cpool(cpool_) {}
   // Move constructor.
   CommandBuffer(CommandBuffer&& other) : cpool(other.cpool) {
+    CommandPool::lock_guard_t lock(cpool.lockmutex);
     vk = other.vk;
     other.vk = VK_NULL_HANDLE;
   }
@@ -68,6 +81,8 @@ class CommandBuffer {
            waitSemaphores.size(), waitStages.size());
       return 1;
     }
+    CommandPool::lock_guard_t lock(cpool.lockmutex);
+    if (flushLazyBarriers(lock)) return 1;
     VkSubmitInfo VkInit(submitInfo);
     submitInfo.commandBufferCount = 1;
     submitInfo.pCommandBuffers = &vk;
@@ -86,6 +101,8 @@ class CommandBuffer {
   WARN_UNUSED_RESULT int reset(
       VkCommandBufferResetFlagBits flags =
           VK_COMMAND_BUFFER_RESET_RELEASE_RESOURCES_BIT) {
+    CommandPool::lock_guard_t lock(cpool.lockmutex);
+    if (flushLazyBarriers(lock)) return 1;
     VkResult v;
     if ((v = vkResetCommandBuffer(vk, flags)) != VK_SUCCESS) {
       logE("%s failed: %d (%s)\n", "vkResetCommandBuffer", v,
@@ -96,10 +113,8 @@ class CommandBuffer {
   }
 
   WARN_UNUSED_RESULT int begin(VkCommandBufferUsageFlagBits usageFlags) {
-    if (!vk) {
-      logE("CommandBuffer::begin: not allocated\n");
-      return 1;
-    }
+    CommandPool::lock_guard_t lock(cpool.lockmutex);
+    if (flushLazyBarriers(lock)) return 1;
     VkCommandBufferBeginInfo VkInit(cbbi);
     cbbi.flags = usageFlags;
     VkResult v = vkBeginCommandBuffer(vk, &cbbi);
@@ -119,10 +134,8 @@ class CommandBuffer {
   }
 
   WARN_UNUSED_RESULT int end() {
-    if (!vk) {
-      logE("CommandBuffer::begin: not allocated\n");
-      return 1;
-    }
+    CommandPool::lock_guard_t lock(cpool.lockmutex);
+    if (flushLazyBarriers(lock)) return 1;
     VkResult v = vkEndCommandBuffer(vk);
     if (v != VK_SUCCESS) {
       logE("%s failed: %d (%s)\n", "vkEndCommandBuffer", v, string_VkResult(v));
@@ -133,49 +146,18 @@ class CommandBuffer {
 
   WARN_UNUSED_RESULT int executeCommands(uint32_t secondaryCmdsCount,
                                          VkCommandBuffer* pSecondaryCmds) {
+    CommandPool::lock_guard_t lock(cpool.lockmutex);
+    if (flushLazyBarriers(lock)) return 1;
     vkCmdExecuteCommands(vk, secondaryCmdsCount, pSecondaryCmds);
     return 0;
-  }
-
-  WARN_UNUSED_RESULT int waitEvents(
-      uint32_t eventCount, const VkEvent* pEvents,
-      VkPipelineStageFlags srcStageMask, VkPipelineStageFlags dstStageMask,
-      uint32_t memoryBarrierCount, const VkMemoryBarrier* pMemoryBarriers,
-      uint32_t bufferMemoryBarrierCount,
-      const VkBufferMemoryBarrier* pBufferMemoryBarriers,
-      uint32_t imageMemoryBarrierCount,
-      const VkImageMemoryBarrier* pImageMemoryBarriers) {
-    vkCmdWaitEvents(vk, eventCount, pEvents, srcStageMask, dstStageMask,
-                    memoryBarrierCount, pMemoryBarriers,
-                    bufferMemoryBarrierCount, pBufferMemoryBarriers,
-                    imageMemoryBarrierCount, pImageMemoryBarriers);
-    return 0;
-  }
-
-  WARN_UNUSED_RESULT int setEvent(VkEvent event,
-                                  VkPipelineStageFlags stageMask) {
-    vkCmdSetEvent(vk, event, stageMask);
-    return 0;
-  }
-  WARN_UNUSED_RESULT int setEvent(Event& event,
-                                  VkPipelineStageFlags stageMask) {
-    return setEvent(event.vk, stageMask);
-  }
-
-  WARN_UNUSED_RESULT int resetEvent(VkEvent event,
-                                    VkPipelineStageFlags stageMask) {
-    vkCmdResetEvent(vk, event, stageMask);
-    return 0;
-  }
-  WARN_UNUSED_RESULT int resetEvent(Event& event,
-                                    VkPipelineStageFlags stageMask) {
-    return resetEvent(event.vk, stageMask);
   }
 
   WARN_UNUSED_RESULT int pushConstants(Pipeline& pipe,
                                        VkShaderStageFlags stageFlags,
                                        uint32_t offset, uint32_t size,
                                        const void* pValues) {
+    CommandPool::lock_guard_t lock(cpool.lockmutex);
+    if (flushLazyBarriers(lock)) return 1;
     vkCmdPushConstants(vk, pipe.pipelineLayout, stageFlags, offset, size,
                        pValues);
     return 0;
@@ -184,12 +166,14 @@ class CommandBuffer {
   template <typename T>
   WARN_UNUSED_RESULT int pushConstants(Pipeline& pipe,
                                        VkShaderStageFlags stageFlags,
-                                       const T& value) {
-    return pushConstants(pipe, stageFlags, 0 /*offset*/, sizeof(T), &value);
+                                       const T& value, uint32_t offset = 0) {
+    return pushConstants(pipe, stageFlags, offset, sizeof(T), &value);
   }
 
   WARN_UNUSED_RESULT int fillBuffer(VkBuffer dst, VkDeviceSize dstOffset,
                                     VkDeviceSize size, uint32_t data) {
+    CommandPool::lock_guard_t lock(cpool.lockmutex);
+    if (flushLazyBarriers(lock)) return 1;
     vkCmdFillBuffer(vk, dst, dstOffset, size, data);
     return 0;
   }
@@ -197,6 +181,8 @@ class CommandBuffer {
   WARN_UNUSED_RESULT int updateBuffer(VkBuffer dst, VkDeviceSize dstOffset,
                                       VkDeviceSize dataSize,
                                       const void* pData) {
+    CommandPool::lock_guard_t lock(cpool.lockmutex);
+    if (flushLazyBarriers(lock)) return 1;
     vkCmdUpdateBuffer(vk, dst, dstOffset, dataSize, pData);
     return 0;
   }
@@ -207,10 +193,8 @@ class CommandBuffer {
       logE("copyBuffer with empty regions\n");
       return 1;
     }
-    if (!vk) {
-      logE("CommandBuffer::begin: not allocated\n");
-      return 1;
-    }
+    CommandPool::lock_guard_t lock(cpool.lockmutex);
+    if (flushLazyBarriers(lock)) return 1;
     vkCmdCopyBuffer(vk, src, dst, regions.size(), regions.data());
     return 0;
   }
@@ -220,55 +204,87 @@ class CommandBuffer {
     return copyBuffer(src, dst, std::vector<VkBufferCopy>{region});
   }
 
-  // See also SmartCommandBuffer::copyImage.
   WARN_UNUSED_RESULT int copyBufferToImage(
       VkBuffer src, VkImage dst, VkImageLayout dstLayout,
       const std::vector<VkBufferImageCopy>& regions) {
+    CommandPool::lock_guard_t lock(cpool.lockmutex);
+    if (flushLazyBarriers(lock)) return 1;
     vkCmdCopyBufferToImage(vk, src, dst, dstLayout, regions.size(),
                            regions.data());
     return 0;
   }
 
-  // See also SmartCommandBuffer::copyImage.
   WARN_UNUSED_RESULT int copyImageToBuffer(
       VkImage src, VkImageLayout srcLayout, VkBuffer dst,
       const std::vector<VkBufferImageCopy>& regions) {
+    CommandPool::lock_guard_t lock(cpool.lockmutex);
+    if (flushLazyBarriers(lock)) return 1;
     vkCmdCopyImageToBuffer(vk, src, srcLayout, dst, regions.size(),
                            regions.data());
     return 0;
   }
 
-  // See also SmartCommandBuffer::copyImage.
   WARN_UNUSED_RESULT int copyImage(VkImage src, VkImageLayout srcLayout,
                                    VkImage dst, VkImageLayout dstLayout,
                                    const std::vector<VkImageCopy>& regions) {
+    CommandPool::lock_guard_t lock(cpool.lockmutex);
+    if (flushLazyBarriers(lock)) return 1;
     vkCmdCopyImage(vk, src, srcLayout, dst, dstLayout, regions.size(),
                    regions.data());
     return 0;
   }
 
-  // See also SmartCommandBuffer::blitImage.
+  // copyImage is a convenience method to get the layout from memory::Image.
+  WARN_UNUSED_RESULT int copyImage(memory::Image& src, memory::Image& dst,
+                                   const std::vector<VkImageCopy>& regions);
+
+  // copyImage is a convenience method to get the layout from memory::Image.
+  WARN_UNUSED_RESULT int copyImage(
+      memory::Buffer& src, memory::Image& dst,
+      const std::vector<VkBufferImageCopy>& regions);
+
+  // copyImage is a convenience method to get the layout from memory::Image.
+  WARN_UNUSED_RESULT int copyImage(
+      memory::Image& src, memory::Buffer& dst,
+      const std::vector<VkBufferImageCopy>& regions);
+
   WARN_UNUSED_RESULT int blitImage(VkImage src, VkImageLayout srcLayout,
                                    VkImage dst, VkImageLayout dstLayout,
                                    const std::vector<VkImageBlit>& regions,
                                    VkFilter filter = VK_FILTER_LINEAR) {
+    CommandPool::lock_guard_t lock(cpool.lockmutex);
+    if (flushLazyBarriers(lock)) return 1;
     vkCmdBlitImage(vk, src, srcLayout, dst, dstLayout, regions.size(),
                    regions.data(), filter);
     return 0;
   }
 
+  // blitImage is a convenience method to get the layout from memory::Image.
+  WARN_UNUSED_RESULT int blitImage(memory::Image& src, memory::Image& dst,
+                                   const std::vector<VkImageBlit>& regions,
+                                   VkFilter filter = VK_FILTER_LINEAR);
+
   WARN_UNUSED_RESULT int resolveImage(
       VkImage src, VkImageLayout srcLayout, VkImage dst,
       VkImageLayout dstLayout, const std::vector<VkImageResolve>& regions) {
+    CommandPool::lock_guard_t lock(cpool.lockmutex);
+    if (flushLazyBarriers(lock)) return 1;
     vkCmdResolveImage(vk, src, srcLayout, dst, dstLayout, regions.size(),
                       regions.data());
     return 0;
   }
 
+  // resolveImage is a convenience method to get the layout from memory::Image.
+  WARN_UNUSED_RESULT int resolveImage(
+      memory::Image& src, memory::Image& dst,
+      const std::vector<VkImageResolve>& regions);
+
   WARN_UNUSED_RESULT int copyQueryPoolResults(
       VkQueryPool queryPool, uint32_t firstQuery, uint32_t queryCount,
       VkBuffer dstBuffer, VkDeviceSize dstOffset, VkDeviceSize stride,
       VkQueryResultFlags flags) {
+    CommandPool::lock_guard_t lock(cpool.lockmutex);
+    if (flushLazyBarriers(lock)) return 1;
     vkCmdCopyQueryPoolResults(vk, queryPool, firstQuery, queryCount, dstBuffer,
                               dstOffset, stride, flags);
     return 0;
@@ -277,31 +293,41 @@ class CommandBuffer {
   WARN_UNUSED_RESULT int resetQueryPool(VkQueryPool queryPool,
                                         uint32_t firstQuery,
                                         uint32_t queryCount) {
+    CommandPool::lock_guard_t lock(cpool.lockmutex);
+    if (flushLazyBarriers(lock)) return 1;
     vkCmdResetQueryPool(vk, queryPool, firstQuery, queryCount);
     return 0;
   }
 
   WARN_UNUSED_RESULT int beginQuery(VkQueryPool queryPool, uint32_t query,
                                     VkQueryControlFlags flags) {
+    CommandPool::lock_guard_t lock(cpool.lockmutex);
+    if (flushLazyBarriers(lock)) return 1;
     vkCmdBeginQuery(vk, queryPool, query, flags);
     return 0;
   }
 
   WARN_UNUSED_RESULT int endQuery(VkQueryPool queryPool, uint32_t query) {
+    CommandPool::lock_guard_t lock(cpool.lockmutex);
+    if (flushLazyBarriers(lock)) return 1;
     vkCmdEndQuery(vk, queryPool, query);
     return 0;
   }
 
   WARN_UNUSED_RESULT int writeTimestamp(VkPipelineStageFlagBits stage,
                                         VkQueryPool queryPool, uint32_t query) {
+    CommandPool::lock_guard_t lock(cpool.lockmutex);
+    if (flushLazyBarriers(lock)) return 1;
     vkCmdWriteTimestamp(vk, stage, queryPool, query);
     return 0;
   }
 
   WARN_UNUSED_RESULT int beginRenderPass(VkRenderPassBeginInfo& passBeginInfo,
                                          VkSubpassContents contents) {
+    CommandPool::lock_guard_t lock(cpool.lockmutex);
+    if (flushLazyBarriers(lock)) return 1;
     if (!passBeginInfo.framebuffer) {
-      logE("beginRenderPass: framebuffer was not set\n");
+      logE("CommandBuffer::beginRenderPass: framebuffer was not set\n");
       return 1;
     }
     vkCmdBeginRenderPass(vk, &passBeginInfo, contents);
@@ -335,6 +361,8 @@ class CommandBuffer {
   }
 
   WARN_UNUSED_RESULT int nextSubpass(VkSubpassContents contents) {
+    CommandPool::lock_guard_t lock(cpool.lockmutex);
+    if (flushLazyBarriers(lock)) return 1;
     vkCmdNextSubpass(vk, contents);
     return 0;
   }
@@ -349,12 +377,16 @@ class CommandBuffer {
   }
 
   WARN_UNUSED_RESULT int endRenderPass() {
+    CommandPool::lock_guard_t lock(cpool.lockmutex);
+    if (flushLazyBarriers(lock)) return 1;
     vkCmdEndRenderPass(vk);
     return 0;
   }
 
   WARN_UNUSED_RESULT int bindPipeline(VkPipelineBindPoint bindPoint,
                                       Pipeline& pipe) {
+    CommandPool::lock_guard_t lock(cpool.lockmutex);
+    if (flushLazyBarriers(lock)) return 1;
     vkCmdBindPipeline(vk, bindPoint, pipe.vk);
     return 0;
   }
@@ -364,6 +396,8 @@ class CommandBuffer {
       uint32_t descriptorSetCount, const VkDescriptorSet* pDescriptorSets,
       uint32_t dynamicOffsetCount = 0,
       const uint32_t* pDynamicOffsets = nullptr) {
+    CommandPool::lock_guard_t lock(cpool.lockmutex);
+    if (flushLazyBarriers(lock)) return 1;
     vkCmdBindDescriptorSets(vk, bindPoint, layout, firstSet, descriptorSetCount,
                             pDescriptorSets, dynamicOffsetCount,
                             pDynamicOffsets);
@@ -394,12 +428,16 @@ class CommandBuffer {
                                            uint32_t bindingCount,
                                            const VkBuffer* pBuffers,
                                            const VkDeviceSize* pOffsets) {
+    CommandPool::lock_guard_t lock(cpool.lockmutex);
+    if (flushLazyBarriers(lock)) return 1;
     vkCmdBindVertexBuffers(vk, firstBinding, bindingCount, pBuffers, pOffsets);
     return 0;
   }
 
   WARN_UNUSED_RESULT int bindIndexBuffer(VkBuffer indexBuf, VkDeviceSize offset,
                                          VkIndexType indexType) {
+    CommandPool::lock_guard_t lock(cpool.lockmutex);
+    if (flushLazyBarriers(lock)) return 1;
     vkCmdBindIndexBuffer(vk, indexBuf, offset, indexType);
     return 0;
   }
@@ -408,6 +446,8 @@ class CommandBuffer {
                                      uint32_t instanceCount,
                                      uint32_t firstIndex, int32_t vertexOffset,
                                      uint32_t firstInstance) {
+    CommandPool::lock_guard_t lock(cpool.lockmutex);
+    if (flushLazyBarriers(lock)) return 1;
     vkCmdDrawIndexed(vk, indexCount, instanceCount, firstIndex, vertexOffset,
                      firstInstance);
     return 0;
@@ -438,18 +478,24 @@ class CommandBuffer {
                                              VkDeviceSize offset,
                                              uint32_t drawCount,
                                              uint32_t stride) {
+    CommandPool::lock_guard_t lock(cpool.lockmutex);
+    if (flushLazyBarriers(lock)) return 1;
     vkCmdDrawIndexedIndirect(vk, buffer, offset, drawCount, stride);
     return 0;
   }
 
   WARN_UNUSED_RESULT int draw(uint32_t vertexCount, uint32_t instanceCount,
                               uint32_t firstVertex, uint32_t firstInstance) {
+    CommandPool::lock_guard_t lock(cpool.lockmutex);
+    if (flushLazyBarriers(lock)) return 1;
     vkCmdDraw(vk, vertexCount, instanceCount, firstVertex, firstInstance);
     return 0;
   }
 
   WARN_UNUSED_RESULT int drawIndirect(VkBuffer buffer, VkDeviceSize offset,
                                       uint32_t drawCount, uint32_t stride) {
+    CommandPool::lock_guard_t lock(cpool.lockmutex);
+    if (flushLazyBarriers(lock)) return 1;
     vkCmdDrawIndirect(vk, buffer, offset, drawCount, stride);
     return 0;
   }
@@ -458,6 +504,8 @@ class CommandBuffer {
                                           const VkClearAttachment* pAttachments,
                                           uint32_t rectCount,
                                           const VkClearRect* pRects) {
+    CommandPool::lock_guard_t lock(cpool.lockmutex);
+    if (flushLazyBarriers(lock)) return 1;
     vkCmdClearAttachments(vk, attachmentCount, pAttachments, rectCount, pRects);
     return 0;
   }
@@ -465,6 +513,8 @@ class CommandBuffer {
   WARN_UNUSED_RESULT int clearColorImage(
       VkImage image, VkImageLayout imageLayout, const VkClearColorValue* pColor,
       uint32_t rangeCount, const VkImageSubresourceRange* pRanges) {
+    CommandPool::lock_guard_t lock(cpool.lockmutex);
+    if (flushLazyBarriers(lock)) return 1;
     vkCmdClearColorImage(vk, image, imageLayout, pColor, rangeCount, pRanges);
     return 0;
   }
@@ -473,6 +523,8 @@ class CommandBuffer {
       VkImage image, VkImageLayout imageLayout,
       const VkClearDepthStencilValue* pDepthStencil, uint32_t rangeCount,
       const VkImageSubresourceRange* pRanges) {
+    CommandPool::lock_guard_t lock(cpool.lockmutex);
+    if (flushLazyBarriers(lock)) return 1;
     vkCmdClearDepthStencilImage(vk, image, imageLayout, pDepthStencil,
                                 rangeCount, pRanges);
     return 0;
@@ -480,12 +532,16 @@ class CommandBuffer {
 
   WARN_UNUSED_RESULT int dispatch(uint32_t groupCountX, uint32_t groupCountY,
                                   uint32_t groupCountZ) {
+    CommandPool::lock_guard_t lock(cpool.lockmutex);
+    if (flushLazyBarriers(lock)) return 1;
     vkCmdDispatch(vk, groupCountX, groupCountY, groupCountZ);
     return 0;
   }
 
   WARN_UNUSED_RESULT int dispatchIndirect(VkBuffer buffer,
                                           VkDeviceSize offset) {
+    CommandPool::lock_guard_t lock(cpool.lockmutex);
+    if (flushLazyBarriers(lock)) return 1;
     vkCmdDispatchIndirect(vk, buffer, offset);
     return 0;
   }
@@ -495,53 +551,110 @@ class CommandBuffer {
   //
   // https://github.com/KhronosGroup/Vulkan-Docs/wiki/Synchronization-Examples
   struct BarrierSet {
+    BarrierSet() { reset(); }
+
+    void reset() {
+      mem.clear();
+      buf.clear();
+      img.clear();
+      srcStageMask = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+      dstStageMask = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+    }
+
     std::vector<VkMemoryBarrier> mem;
     std::vector<VkBufferMemoryBarrier> buf;
     std::vector<VkImageMemoryBarrier> img;
-  };
 
-  // See also SmartCommandBuffer::transition().
-  WARN_UNUSED_RESULT int barrier(
-      BarrierSet& bset,
-      VkPipelineStageFlags srcStageMask = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-      VkPipelineStageFlags dstStageMask = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
-      VkDependencyFlags dependencyFlags = 0) {
-    bool found = false;
-    for (auto& mem : bset.mem) {
-      found = true;
-      if (mem.sType != VK_STRUCTURE_TYPE_MEMORY_BARRIER) {
-        logE("BarrierSet::mem contains invalid VkMemoryBarrier\n");
-        return 1;
-      }
-      trimSrcStage(mem.srcAccessMask, srcStageMask);
-      trimDstStage(mem.dstAccessMask, dstStageMask);
-    }
-    for (auto& buf : bset.buf) {
-      found = true;
-      if (!buf.buffer) {
-        logE("BarrierSet::buf contains invalid VkBuffer\n");
-        return 1;
-      }
-      trimSrcStage(buf.srcAccessMask, srcStageMask);
-      trimDstStage(buf.dstAccessMask, dstStageMask);
-    }
-    for (auto& img : bset.img) {
-      found = true;
-      if (!img.image) {
-        logE("BarrierSet::img contains invalid VkImage\n");
-        return 1;
-      }
-      trimSrcStage(img.srcAccessMask, srcStageMask);
-      trimDstStage(img.dstAccessMask, dstStageMask);
-    }
-    if (!found) {
-      logE("All {mem,buf,img} were empty in BarrierSet.\n");
+    VkPipelineStageFlags srcStageMask;
+    VkPipelineStageFlags dstStageMask;
+  };
+  BarrierSet lazyBarriers;
+
+  // waitBarrier calls vkCmdPipelineBarrier. This will flush previous barrier()
+  // calls if they were used, but gives direct access to vkCmdPipelineBarrier.
+  // The other forms of barrier() below lazily construct a BarrierSet which is
+  // automatically flushed before the command buffer is used again.
+  WARN_UNUSED_RESULT int waitBarrier(const BarrierSet& b,
+                                     VkDependencyFlags dependencyFlags = 0);
+
+  // waitEvents calls vkCmdWaitEvents. Since vkCmdWaitEvents also accepts
+  // all the barrier structs, this flushes all lazy barriers.
+  // Please see setEvent() and resetEvent() for using VkEvent.
+  WARN_UNUSED_RESULT int waitEvents(const std::vector<VkEvent>& events);
+
+  // waitEvents calls vkCmdWaitEvents. But it accepts all the barrier structs
+  // as well, except not VkDependencyFlags. In addition, any VkEvents are
+  // waited on. Please see setEvent() and resetEvent() for using VkEvent.
+  WARN_UNUSED_RESULT int waitEvents(const std::vector<VkEvent>& events,
+                                    BarrierSet& b) {
+    CommandPool::lock_guard_t lock(cpool.lockmutex);
+    if (flushLazyBarriers(lock)) return 1;
+    vkCmdWaitEvents(vk, events.size(), events.data(), b.srcStageMask,
+                    b.dstStageMask, b.mem.size(), b.mem.data(), b.buf.size(),
+                    b.buf.data(), b.img.size(), b.img.data());
+    return 0;
+  }
+
+  // barrier(Image, VkImageLayout) adds a barrier that transitions Image to
+  // a new layout.
+  WARN_UNUSED_RESULT int barrier(memory::Image& img, VkImageLayout newLayout);
+
+  // barrier(Image, VkImageLayout, VkImageSubresourceRange) adds a barrier that
+  // transitions the part of Image given by 'range' to a new layout.
+  WARN_UNUSED_RESULT int barrier(memory::Image& img, VkImageLayout newLayout,
+                                 const VkImageSubresourceRange& range);
+
+  // barrier(VkBufferMemoryBarrier) can be used to transition a buffer to a new
+  // queue.
+  WARN_UNUSED_RESULT int barrier(const VkBufferMemoryBarrier& b) {
+    if (b.sType != VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER) {
+      logE("barrier(%s): invalid %s.sType\n", "VkBufferMemoryBarrier",
+           "VkBufferMemoryBarrier");
       return 1;
     }
-    vkCmdPipelineBarrier(vk, srcStageMask, dstStageMask, dependencyFlags,
-                         bset.mem.size(), bset.mem.data(), bset.buf.size(),
-                         bset.buf.data(), bset.img.size(), bset.img.data());
+    if (!b.buffer) {
+      logE("CommandBuffer::barrier(VkBufferMemoryBarrier): invalid VkBuffer\n");
+      return 1;
+    }
+    CommandPool::lock_guard_t lock(cpool.lockmutex);
+    lazyBarriers.buf.emplace_back(b);
     return 0;
+  }
+
+  // barrier(VkMemoryBarrier) can be used to enforce a device-wide barrier.
+  WARN_UNUSED_RESULT int barrier(const VkMemoryBarrier& b) {
+    if (b.sType != VK_STRUCTURE_TYPE_MEMORY_BARRIER) {
+      logE("barrier(%s): invalid %s.sType\n", "VkMemoryBarrier",
+           "VkMemoryBarrier");
+      return 1;
+    }
+    CommandPool::lock_guard_t lock(cpool.lockmutex);
+    lazyBarriers.mem.emplace_back(b);
+    return 0;
+  }
+
+  WARN_UNUSED_RESULT int setEvent(VkEvent event,
+                                  VkPipelineStageFlags stageMask) {
+    CommandPool::lock_guard_t lock(cpool.lockmutex);
+    if (flushLazyBarriers(lock)) return 1;
+    vkCmdSetEvent(vk, event, stageMask);
+    return 0;
+  }
+  WARN_UNUSED_RESULT int setEvent(Event& event,
+                                  VkPipelineStageFlags stageMask) {
+    return setEvent(event.vk, stageMask);
+  }
+
+  WARN_UNUSED_RESULT int resetEvent(VkEvent event,
+                                    VkPipelineStageFlags stageMask) {
+    CommandPool::lock_guard_t lock(cpool.lockmutex);
+    if (flushLazyBarriers(lock)) return 1;
+    vkCmdResetEvent(vk, event, stageMask);
+    return 0;
+  }
+  WARN_UNUSED_RESULT int resetEvent(Event& event,
+                                    VkPipelineStageFlags stageMask) {
+    return resetEvent(event.vk, stageMask);
   }
 
   //
@@ -550,46 +663,64 @@ class CommandBuffer {
   //
 
   WARN_UNUSED_RESULT int setBlendConstants(const float blendConstants[4]) {
+    CommandPool::lock_guard_t lock(cpool.lockmutex);
+    if (flushLazyBarriers(lock)) return 1;
     vkCmdSetBlendConstants(vk, blendConstants);
     return 0;
   }
   WARN_UNUSED_RESULT int setDepthBias(float constantFactor, float clamp,
                                       float slopeFactor) {
+    CommandPool::lock_guard_t lock(cpool.lockmutex);
+    if (flushLazyBarriers(lock)) return 1;
     vkCmdSetDepthBias(vk, constantFactor, clamp, slopeFactor);
     return 0;
   }
   WARN_UNUSED_RESULT int setDepthBounds(float minBound, float maxBound) {
+    CommandPool::lock_guard_t lock(cpool.lockmutex);
+    if (flushLazyBarriers(lock)) return 1;
     vkCmdSetDepthBounds(vk, minBound, maxBound);
     return 0;
   }
   WARN_UNUSED_RESULT int setLineWidth(float lineWidth) {
+    CommandPool::lock_guard_t lock(cpool.lockmutex);
+    if (flushLazyBarriers(lock)) return 1;
     vkCmdSetLineWidth(vk, lineWidth);
     return 0;
   }
   WARN_UNUSED_RESULT int setScissor(uint32_t firstScissor,
                                     uint32_t scissorCount,
                                     const VkRect2D* pScissors) {
+    CommandPool::lock_guard_t lock(cpool.lockmutex);
+    if (flushLazyBarriers(lock)) return 1;
     vkCmdSetScissor(vk, firstScissor, scissorCount, pScissors);
     return 0;
   }
   WARN_UNUSED_RESULT int setStencilCompareMask(VkStencilFaceFlags faceMask,
                                                uint32_t compareMask) {
+    CommandPool::lock_guard_t lock(cpool.lockmutex);
+    if (flushLazyBarriers(lock)) return 1;
     vkCmdSetStencilCompareMask(vk, faceMask, compareMask);
     return 0;
   }
   WARN_UNUSED_RESULT int setStencilReference(VkStencilFaceFlags faceMask,
                                              uint32_t reference) {
+    CommandPool::lock_guard_t lock(cpool.lockmutex);
+    if (flushLazyBarriers(lock)) return 1;
     vkCmdSetStencilReference(vk, faceMask, reference);
     return 0;
   }
   WARN_UNUSED_RESULT int setStencilWriteMask(VkStencilFaceFlags faceMask,
                                              uint32_t writeMask) {
+    CommandPool::lock_guard_t lock(cpool.lockmutex);
+    if (flushLazyBarriers(lock)) return 1;
     vkCmdSetStencilWriteMask(vk, faceMask, writeMask);
     return 0;
   }
   WARN_UNUSED_RESULT int setViewport(uint32_t firstViewport,
                                      uint32_t viewportCount,
                                      const VkViewport* pViewports) {
+    CommandPool::lock_guard_t lock(cpool.lockmutex);
+    if (flushLazyBarriers(lock)) return 1;
     vkCmdSetViewport(vk, firstViewport, viewportCount, pViewports);
     return 0;
   }

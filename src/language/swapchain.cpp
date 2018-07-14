@@ -98,6 +98,14 @@ int Device::resetSwapChain(command::CommandPool& cpool, size_t poolQindex) {
   } else {
     // Device queues were set up such that a different QueueFamily does PRESENT
     // and a different QueueFamily does GRAPHICS.
+    logW(
+        "SHARING_MODE_CONCURRENT: what GPU is this? It has never been seen.\n");
+    logW("TODO: Test a per-resource barrier (queue ownership transfer).\n");
+    // Is a queue ownership transfer faster than SHARING_MODE_CONCURRENT?
+    // Measure, measure, measure!
+    //
+    // Note also that a CONCURRENT swapchain, if moved to a different queue in
+    // the same QueueFamily, must be done by an ownership barrier.
     scci.imageSharingMode = VK_SHARING_MODE_CONCURRENT;
     scci.queueFamilyIndexCount = 2;
     scci.pQueueFamilyIndices = qfamIndices;
@@ -108,8 +116,12 @@ int Device::resetSwapChain(command::CommandPool& cpool, size_t poolQindex) {
     logE("%s failed: %d (%s)\n", "vkCreateSwapchainKHR", v, string_VkResult(v));
     return 1;
   }
-  // This avoids deleting dev.swapChain until after vkCreateSwapchainKHR().
-  swapChain.reset();             // Delete the old dev.swapChain.
+  // swapChain.inst == VK_NULL_HANDLE the first time through,
+  // swapChain needs to be reset to use dev.
+  //
+  // Also, calling reset here avoids deleting dev.swapChain until after
+  // vkCreateSwapchainKHR().
+  swapChain.reset(dev);          // Delete the old dev.swapChain.
   *(&swapChain) = newSwapChain;  // Install the new dev.swapChain.
   swapChain.allocator = dev.allocator;
 

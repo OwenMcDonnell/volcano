@@ -1,8 +1,82 @@
 /* Copyright (c) 2017 the Volcano Authors. Licensed under the GPLv3.
+ *
+ * VkPtr is a container for vkDestroy* functions. vkDestroy* functions come
+ * in 3 types:
+ * 1. vkDestroyInstance(VkInstance, const VkAllocationCallbacks*)
+ *    vkDestroyInstance and vkDestroyDevice are the only functions like this.
+ * 2. vkDestroyFence(VkDevice, VkFence, const VkAllocationCallbacks*) and
+ *    similar functions that take a VkDevice.
+ * 3. vkDestroySurfaceKHR(VkInstance, VkSurfaceKHR, const VkAlloca..s*)
+ *    and similar functions that take a VkInstance.
+ *
+ * Put simply, Vulkan leaves objects' life cycle up to you, including keeping
+ * track of the instance or device where the object lives.
+ *
+ * Your app can just #include <src/language/language.h> and this header (and
+ * others) will be automatically included. This header has logic to
+ * #include <vulkan/vulkan.h> but also handles Android where a different
+ * #include is needed.
+ *
+ * VkPtr "solves" the Vulkan object life cycle by:
+ * 1. Destroying the object in the ~VkPtr() destructor.
+ * 2. Checking for potential memory leaks by checking that the object is not
+ *    null when it is read (dereferenced), and that the object IS null when
+ *    it is written (address-of).
+ * 3. Adds type safety. If the destroy function takes a device, then your app
+ *    must pass in a VkPtr<VkDevice> at the same time. Etc.
+ *
+ * Probably the main reason for reading this is when you get an error related
+ * to correct usage of VkPtr. The VkPtr class is written "long" to avoid too
+ * heavy use of templates, optimizing instead for clearer compiler error
+ * messages.
+ *
+ * Declare a VkPtr like this:
+ *   VkPtr<VkInstance> instance{vkDestroyInstance};
+ *
+ * The Vulkan API uses functions named VkCreate* to create objects. They
+ * accept a pointer which receives the created object, so VkPtr overloads
+ * the & operator and checks for correct usage:
+ *   vkCreateInstance(pInstanceCreateInfo, pAllocator, &instance)
+ *                            Using the & operator ----^
+ *
+ * The VkPtr can be used just like the underlying type (it transparently gets
+ * type-casted using template<typename T> operator T()).
+ *   vkGetInstanceProcAddr(instance, "vkCreateDebugReportCallbackEXT")
+ *                         ^---- cast from VkPtr<VkInstance> to VkInstance
+ *
+ * When the object needs to be destroyed and recreated "in place," call reset()
+ * to destroy the VkPtr and reset it to empty. There are 3 reset() functions,
+ * because reset() with 0 arguments also resets the stored VkInstance and
+ * VkDevice:
+ *   scci.oldSwapchain = swapChain;
+ *   v = vkCreateSwapchainKHR(dev, &scci, dev.allocator, &newSwapChain);
+ *   if (v != VK_SUCCESS) { ... }
+ *   // This avoids deleting dev.swapChain until after vkCreateSwapchainKHR().
+ *   swapChain.reset(dev);          // Delete the old dev.swapChain.
+ *   *(&swapChain) = newSwapChain;  // Install the new dev.swapChain.
+ *
+ * The destructor, ~VkPtr() just calls reset();
+ *
+ * Debugging tips:
+ * 1. Compiler error on a VkPtr declaration:
+ *    Check if the destroy function matches the 3 VkPtr constructors
+ *    (for the 3 types of destroy functions Vulkan uses).
+ *
+ * 2. App aborts with a VkPtr error:
+ *    Remember to call reset() to make sure the VkPtr is empty before calling
+ *    operator &() to set it. Is the code supposed to be destroying/recreating
+ *    the VkPtr "in place" like that?
+ *
+ *    The app can also abort if the VkPtr is empty but an attempt was made to
+ *    cast it to the underlying type (attempt to dereference a VK_NULL_HANDLE).
+ *
+ *    Set a breakpoint and rerun it in a debugger, if needed.
  */
+#include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <typeinfo>
 #ifndef _MSC_VER
 #include <cxxabi.h>
@@ -46,6 +120,7 @@
 
 #endif  // If 64-bit platform.
 
+// #include the correct header (not vulkan/vulkan.h on Android!)
 #ifdef __ANDROID__
 #include <common/vulkan_wrapper.h>
 #else
@@ -77,6 +152,8 @@ void logE(const char *fmt, ...)  // Error log.
     VOLCANO_PRINTF(1, 2);
 void logF(const char *fmt, ...)  // Fatal log.
     VOLCANO_PRINTF(1, 2);
+// logVolcano logs at an arbitrary log level.
+void logVolcano(char level, const char *fmt, va_list ap);
 
 #define VKDEBUG(...)
 #ifndef VKDEBUG
@@ -105,15 +182,13 @@ class VkPtr {
  public:
   VkPtr() = delete;
   VkPtr(VkPtr &&other) {
-    VKDEBUG("this=%p VkPtr<%s> steal from %p dD=%p pD=%p\n", this, typeID,
-            std::addressof(other), other.deleterDev, other.pDev);
     object = other.object;
     deleterT = other.deleterT;
     deleterInst = other.deleterInst;
     deleterDev = other.deleterDev;
     allocator = other.allocator;
-    pInst = other.pInst;
-    pDev = other.pDev;
+    inst = other.inst;
+    dev = other.dev;
 
     // The difference between VK_NULL_HANDLE and nullptr comes down to 64-bit vs
     // 32-bit:
@@ -127,8 +202,8 @@ class VkPtr {
     other.deleterInst = nullptr;
     other.deleterDev = nullptr;
     other.allocator = nullptr;
-    other.pInst = nullptr;
-    other.pDev = nullptr;
+    other.inst = VK_NULL_HANDLE;
+    other.dev = VK_NULL_HANDLE;
   }
   VkPtr(const VkPtr &) = delete;
 
@@ -140,7 +215,8 @@ class VkPtr {
     auto typeID = getTypeID_you_must_free_the_return_value();
     // If your app dies with this error, check that you are casting the return
     // value to (bool) so the compiler uses operator bool() below.
-    logF("FATAL: VkPtr::operator %s() on an empty VkPtr!\n", typeID);
+    logF("VkPtr.h:%d FATAL: VkPtr::operator %s() on an empty VkPtr!\n",
+         __LINE__, typeID);
     free(typeID);
     exit(1);
     return VK_NULL_HANDLE;
@@ -156,8 +232,8 @@ class VkPtr {
     object = VK_NULL_HANDLE;
     if (!destroy_fn) {
       auto typeID = getTypeID_you_must_free_the_return_value();
-      logF("VkPtr<%s>::VkPtr(T,allocator) with destroy_fn=%p\n", typeID,
-           destroy_fn);
+      logF("VkPtr.h:%d VkPtr<%s>::VkPtr(T,allocator) with destroy_fn=%p\n",
+           __LINE__, typeID, destroy_fn);
       free(typeID);
       exit(1);
     }
@@ -165,21 +241,20 @@ class VkPtr {
     deleterInst = nullptr;
     deleterDev = nullptr;
     allocator = nullptr;
-    pInst = nullptr;
-    pDev = nullptr;
+    reset();
   }
 
   // Constructor that has a destroy_fn which takes 3 arguments: a VkInstance,
   // the obj, and the allocator. Note that the VkInstance is wrapped in a VkPtr
   // itself.
-  explicit VkPtr(VkPtr<VkInstance> &instance,
+  explicit VkPtr(const VkPtr<VkInstance> &instPtr,
                  VKAPI_ATTR void(VKAPI_CALL *destroy_fn)(
                      VkInstance, T, const VkAllocationCallbacks *)) {
     object = VK_NULL_HANDLE;
     if (!destroy_fn) {
       auto typeID = getTypeID_you_must_free_the_return_value();
-      logF("VkPtr<%s>::VkPtr(inst,T,allocator) with destroy_fn=%p\n", typeID,
-           destroy_fn);
+      logF("VkPtr.h:%d VkPtr<%s>::VkPtr(inst,T,allocator) with destroy_fn=%p\n",
+           __LINE__, typeID, destroy_fn);
       free(typeID);
       exit(1);
     }
@@ -189,21 +264,20 @@ class VkPtr {
     deleterInst = destroy_fn;
     deleterDev = nullptr;
     allocator = nullptr;
-    pInst = &instance.object;
-    pDev = nullptr;
+    reset(instPtr);
   }
 
   // Constructor that has a destroy_fn which takes 3 arguments: a VkDevice, the
   // obj, and the allocator. Note that the VkDevice is wrapped in a VkPtr
   // itself.
-  explicit VkPtr(VkPtr<VkDevice> &device,
+  explicit VkPtr(const VkPtr<VkDevice> &devPtr,
                  VKAPI_ATTR void(VKAPI_CALL *destroy_fn)(
                      VkDevice, T, const VkAllocationCallbacks *)) {
     object = VK_NULL_HANDLE;
     if (!destroy_fn) {
       auto typeID = getTypeID_you_must_free_the_return_value();
-      logF("VkPtr<%s>::VkPtr(dev,T,allocator) with destroy_fn=%p\n", typeID,
-           destroy_fn);
+      logF("VkPtr.h:%d VkPtr<%s>::VkPtr(dev,T,allocator) with destroy_fn=%p\n",
+           __LINE__, typeID, destroy_fn);
       free(typeID);
       exit(1);
     }
@@ -215,14 +289,17 @@ class VkPtr {
     deleterInst = nullptr;
     deleterDev = destroy_fn;
     allocator = nullptr;
-    pInst = nullptr;
-    pDev = &device.object;
+    reset(devPtr);
   }
 
   virtual ~VkPtr() { reset(); }
 
+  // reset with 0 arguments clears the instance and device after
+  // calling the deleter function on the object.
   void reset() {
     if (!object) {
+      inst = VK_NULL_HANDLE;
+      dev = VK_NULL_HANDLE;
       return;
     }
     if (deleterT) {
@@ -230,45 +307,97 @@ class VkPtr {
               *reinterpret_cast<void **>(&object));
       deleterT(object, allocator);
     } else if (deleterInst) {
+      uint64_t instv = 0;
+      memcpy(&instv, &inst, sizeof(instv));
       VKDEBUG(
-          "VkPtr<%s>::reset() calling deleterInst(inst=%p, %p, allocator)\n",
-          typeID, pInst, *reinterpret_cast<void **>(&object));
-      deleterInst(*pInst, object, allocator);
+          "VkPtr<%s>::reset() calling deleterInst(inst=%llx, %p, allocator)\n",
+          typeID, instv, *reinterpret_cast<void **>(&object));
+      if (inst == VK_NULL_HANDLE) {
+        auto typeID = getTypeID_you_must_free_the_return_value();
+        logE("VkPtr<%s>::reset(): inst=VK_NULL_HANDLE\n", typeID);
+        free(typeID);
+      } else {
+        deleterInst(inst, object, allocator);
+      }
     } else if (deleterDev) {
-      VKDEBUG("VkPtr<%s>::reset() calling deleterDev(dev=%p, %p, allocator)\n",
-              typeID, pDev, *reinterpret_cast<void **>(&object));
-      deleterDev(*pDev, object, allocator);
+      uint64_t devv = 0;
+      memcpy(&devv, &dev, sizeof(devv));
+      VKDEBUG(
+          "VkPtr<%s>::reset() calling deleterDev(dev=%llx, %p, allocator)\n",
+          typeID, devv, *reinterpret_cast<void **>(&object));
+      if (dev == VK_NULL_HANDLE) {
+        auto typeID = getTypeID_you_must_free_the_return_value();
+        logE("VkPtr<%s>::reset(): dev=VK_NULL_HANDLE\n", typeID);
+        free(typeID);
+      } else {
+        deleterDev(dev, object, allocator);
+      }
     } else {
       VKDEBUG("this=%p VkPtr<%s> deleter = null object = %p!\n", this, typeID,
               *reinterpret_cast<void **>(&object));
     }
+    inst = VK_NULL_HANDLE;
+    dev = VK_NULL_HANDLE;
     object = VK_NULL_HANDLE;
   }
 
+  void reset(const VkPtr<VkInstance> &instPtr) {
+    reset();
+    if (!deleterInst) {
+      auto typeID = getTypeID_you_must_free_the_return_value();
+      logF(
+          "VkPtr.h:%d VkPtr<%s>::reset(instPtr) with deleterT=%p "
+          "deleterInst=%p deleterDev=%p\n",
+          __LINE__, typeID, deleterT, deleterInst, deleterDev);
+      free(typeID);
+      exit(1);
+    }
+    inst = instPtr.object;
+  }
+
+  void reset(const VkPtr<VkDevice> &devPtr) {
+    reset();
+    if (!deleterDev) {
+      auto typeID = getTypeID_you_must_free_the_return_value();
+      logF(
+          "VkPtr.h:%d VkPtr<%s>::reset(devPtr) with deleterT=%p "
+          "deleterInst=%p deleterDev=%p\n",
+          __LINE__, typeID, deleterT, deleterInst, deleterDev);
+      free(typeID);
+      exit(1);
+    }
+    dev = devPtr.object;
+  }
+
   // Restrict non-const access. The object must be VK_NULL_HANDLE before it can
-  // be written. Call reset() if necessary.
+  // be written. You must call reset() first if you really want to do this.
   T *operator&() {
     if (object) {
       auto typeID = getTypeID_you_must_free_the_return_value();
-      logF("FATAL: VkPtr<%s>::operator& before reset()\n", typeID);
+      logF("VkPtr.h:%d FATAL: VkPtr<%s>::operator& before reset()\n", __LINE__,
+           typeID);
       free(typeID);
       exit(1);
     }
     return &object;
   }
 
-  T object;
-
   VkAllocationCallbacks *allocator;
 
- private:
+ protected:
+  // Allow any VkPtr<U> as a friend of VkPtr<T>.
+  template <typename U>
+  friend class VkPtr;
+
+  T object;
+
   VKAPI_ATTR void(VKAPI_CALL *deleterT)(T, const VkAllocationCallbacks *);
   VKAPI_ATTR void(VKAPI_CALL *deleterInst)(VkInstance, T,
                                            const VkAllocationCallbacks *);
   VKAPI_ATTR void(VKAPI_CALL *deleterDev)(VkDevice, T,
                                           const VkAllocationCallbacks *);
-  VkInstance *pInst;
-  VkDevice *pDev;
+  VkInstance inst;
+  VkDevice dev;
 
   char *getTypeID_you_must_free_the_return_value() const {
     int status;

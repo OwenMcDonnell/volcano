@@ -1,4 +1,4 @@
-# Copyright 2017 the Volcano Authors. All rights reserved.
+# Copyright 2017-2018 the Volcano Authors. All rights reserved.
 # Licensed under the GPL v3.
 
 declare_args() {
@@ -113,10 +113,15 @@ config("assimp_config") {
 }
 
 config("assimp_local_config") {
-  if (!is_win) {
+  include_dirs = [ "$assimp_root" ]
+  if (is_win) {
+    # Win does not ship zlib in a well-known place, so use skia.
+    include_dirs += [
+      "$assimp_root/../volcano/vendor/skia/third_party/externals/zlib",
+    ]
+  } else {
     cflags = [ "-Wno-ignored-qualifiers" ]
   }
-  include_dirs = [ "$assimp_root" ]
 }
 
 #
@@ -1049,5 +1054,5 @@ assimp_target("assimp") {
   if (use_assimp_exporter) {
     deps += [ ":assimp_exporter" ]
   }
-  libs = [ "z" ]
+  deps += [ "../skia/zlib" ]
 }

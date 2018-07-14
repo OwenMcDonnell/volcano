@@ -219,7 +219,7 @@ template("mac_toolchain") {
 
     tool("solink") {
       dylib = "{{output_dir}}/{{target_output_name}}{{output_extension}}"  # eg "./libfoo.dylib"
-      #rspfile = dylib + ".rsp"
+      rspfile = dylib + ".rsp"
       pool = "//src/gn/toolchain:link_pool($default_toolchain)"
 
       # These variables are not built into GN but are helpers that implement
@@ -234,8 +234,7 @@ template("mac_toolchain") {
 
 
       link_command = "$linker_driver $ld -shared $dsym_switch"
-      #link_command += "{{ldflags}} -o \"\$dl\" -Wl,-filelist,\"$rspfile\" {{libs}} {{solibs}}"
-      link_command += "{{ldflags}} -o \"\$dl\" {{inputs}} {{libs}} {{solibs}}"
+      link_command += "{{ldflags}} -o \"\$dl\" -Wl,-filelist,\"$rspfile\" {{libs}} {{solibs}}"
 
       extract_toc_command = "{ otool -l \"\$dl\" | grep LC_ID_DYLIB -A 5; nm -gP \"\$dl\" | cut -f1-2 -d' ' | grep -v U\$\$; true; }"
 
@@ -244,7 +243,7 @@ template("mac_toolchain") {
       command += "$link_command && $extract_toc_command > \"\$toc\"; "
       command += "if [ \"\${toc%.tmp}\" != \"\$toc\" ] && ! cmp -s \"\$toc\" \"\$dl.TOC\"; then mv \"\$toc\" \"\$dl.TOC\"; fi"
 
-      #rspfile_content = "{{inputs_newline}}"
+      rspfile_content = "{{inputs_newline}}"
 
       description = "SOLINK {{output}}"
 

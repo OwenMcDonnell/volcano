@@ -5,8 +5,9 @@
 
 namespace memory {
 
-int Sampler::ctorExisting(language::Device& dev) {
-  vk.reset();
+int Sampler::ctorExisting() {
+  auto& dev = image.mem.dev;
+  vk.reset(dev.dev);
   VkResult v = vkCreateSampler(dev.dev, &info, dev.dev.allocator, &vk);
   if (v != VK_SUCCESS) {
     logE("%s failed: %d (%s)\n", "vkCreateSampler", v, string_VkResult(v));
@@ -17,13 +18,17 @@ int Sampler::ctorExisting(language::Device& dev) {
 
 int Sampler::ctorError(command::CommandPool& cpool, Image& src) {
   science::SmartCommandBuffer setup{cpool, ASSUME_POOL_QINDEX};
-  return setup.ctorError() || setup.autoSubmit() ||
-         ctorError(cpool.dev, setup, src);
+  return setup.ctorError() || setup.autoSubmit() || ctorError(setup, src);
 }
 
-int Sampler::ctorError(language::Device& dev, command::CommandBuffer& buffer,
-                       Image& src) {
-  if (ctorExisting(dev)) {
+int Sampler::ctorError(command::CommandBuffer& buffer, Image& src) {
+  if (&buffer.cpool.dev != &src.mem.dev || &image.mem.dev != &src.mem.dev) {
+    logE("buffer.cpool.dev=%p src.mem.dev=%p image.mem.dev=%p: %s\n",
+         &buffer.cpool.dev, &src.mem.dev, &image.mem.dev,
+         "please use only one device.");
+    return 1;
+  }
+  if (ctorExisting()) {
     return 1;
   }
 
@@ -35,60 +40,31 @@ int Sampler::ctorError(language::Device& dev, command::CommandBuffer& buffer,
   image.info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
   image.info.usage =
       VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
-  imageView.info.subresourceRange.levelCount = src.info.mipLevels;
+  imageView.info.subresourceRange = src.getSubresourceRange();
 
-  if (image.ctorDeviceLocal(dev) || image.bindMemory(dev) ||
-      imageView.ctorError(dev, image.vk, image.info.format)) {
-    return 1;
-  }
-
-  command::CommandBuffer::BarrierSet bsetSrc;
-  if (src.currentLayout != VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL) {
-    bsetSrc.img.push_back(
-        src.makeTransition(VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL));
-    science::SubresUpdate<VkImageSubresourceRange>(
-        bsetSrc.img.back().subresourceRange)
-        .setMips(0, src.info.mipLevels);
-    src.currentLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-  }
-  bsetSrc.img.push_back(
-      image.makeTransition(VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL));
-  science::SubresUpdate<VkImageSubresourceRange>(
-      bsetSrc.img.back().subresourceRange)
-      .setMips(0, image.info.mipLevels);
-  if (buffer.barrier(bsetSrc)) {
-    return 1;
-  }
-  image.currentLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-
-  if (buffer.copyImage(src.vk, src.currentLayout, image.vk, image.currentLayout,
-                       science::ImageCopies(src))) {
-    return 1;
-  }
-
-  command::CommandBuffer::BarrierSet bsetShader;
-  bsetShader.img.push_back(
-      image.makeTransition(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL));
-  science::SubresUpdate<VkImageSubresourceRange>(
-      bsetShader.img.back().subresourceRange)
-      .setMips(0, image.info.mipLevels);
-  if (buffer.barrier(bsetShader)) {
-    return 1;
-  }
-  image.currentLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-  return 0;
+  return image.ctorDeviceLocal() || image.bindMemory() ||
+         imageView.ctorError(image.mem.dev, image.vk, image.info.format) ||
+         buffer.barrier(src, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL) ||
+         buffer.barrier(image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL) ||
+         buffer.copyImage(src, image, science::ImageCopies(src, image)) ||
+         buffer.barrier(image, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 }
 
 int Sampler::ctorError(command::CommandPool& cpool, Buffer& src,
                        const std::vector<VkBufferImageCopy>& regions) {
   science::SmartCommandBuffer setup{cpool, ASSUME_POOL_QINDEX};
   return setup.ctorError() || setup.autoSubmit() ||
-         ctorError(cpool.dev, setup, src, regions);
+         ctorError(setup, src, regions);
 }
 
-int Sampler::ctorError(language::Device& dev, command::CommandBuffer& buffer,
-                       Buffer& src,
+int Sampler::ctorError(command::CommandBuffer& buffer, Buffer& src,
                        const std::vector<VkBufferImageCopy>& regions) {
+  if (&buffer.cpool.dev != &src.mem.dev || &image.mem.dev != &src.mem.dev) {
+    logE("buffer.cpool.dev=%p src.mem.dev=%p image.mem.dev=%p: %s\n",
+         &buffer.cpool.dev, &src.mem.dev, &image.mem.dev,
+         "please use only one device.");
+    return 1;
+  }
   if (!image.info.extent.width || !image.info.extent.height ||
       !image.info.extent.depth || !image.info.format || !image.info.mipLevels ||
       !image.info.arrayLayers) {
@@ -102,7 +78,8 @@ int Sampler::ctorError(language::Device& dev, command::CommandBuffer& buffer,
     return 1;
   }
 
-  vk.reset();
+  auto& dev = image.mem.dev;
+  vk.reset(dev.dev);
   VkResult v = vkCreateSampler(dev.dev, &info, dev.dev.allocator, &vk);
   if (v != VK_SUCCESS) {
     logE("%s failed: %d (%s)\n", "vkCreateSampler", v, string_VkResult(v));
@@ -114,32 +91,11 @@ int Sampler::ctorError(language::Device& dev, command::CommandBuffer& buffer,
   image.info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
   image.info.usage |=
       VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
-  if (image.ctorDeviceLocal(dev) || image.bindMemory(dev) ||
-      imageView.ctorError(dev, image.vk, image.info.format)) {
-    return 1;
-  }
-
-  command::CommandBuffer::BarrierSet bset1;
-  bset1.img.push_back(
-      image.makeTransition(VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL));
-  science::SubresUpdate<VkImageSubresourceRange>(
-      bset1.img.back().subresourceRange)
-      .setMips(0, image.info.mipLevels);
-  image.currentLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-  command::CommandBuffer::BarrierSet bset2;
-  bset2.img.push_back(
-      image.makeTransition(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL));
-  science::SubresUpdate<VkImageSubresourceRange>(
-      bset2.img.back().subresourceRange)
-      .setMips(0, image.info.mipLevels);
-  if (buffer.barrier(bset1) ||
-      buffer.copyBufferToImage(src.vk, image.vk, image.currentLayout,
-                               regions) ||
-      buffer.barrier(bset2)) {
-    return 1;
-  }
-  image.currentLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-  return 0;
+  return image.ctorDeviceLocal() || image.bindMemory() ||
+         imageView.ctorError(image.mem.dev, image.vk, image.info.format) ||
+         buffer.barrier(image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL) ||
+         buffer.copyImage(src, image, regions) ||
+         buffer.barrier(image, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 }
 
 }  // namespace memory

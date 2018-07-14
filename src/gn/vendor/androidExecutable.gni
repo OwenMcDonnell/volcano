@@ -13,14 +13,18 @@ import("//src/gn/toolchain/android/settings.gni")
 
 declare_args() {
   android_variants = [
-    #"arm", # arm vulkan.h is outdated.
+    "arm",
     "arm64",
     "mipsel",
     "mips64el",
     "x86",
     #"x64", Being tracked at https://github.com/ndsol/volcano/issues/11.
   ]
+  android_clang = android_ndk_major_version >= 17
 }
+
+assert(android_clang || android_ndk_major_version < 17,
+       "Android NDK r18 will drop GCC entirely. Please set android_clang = true.")
 
 if (android_variants_dir != "" && current_toolchain != host_toolchain) {
   # Build the shared_library foreach variant. This does not build the final APK.
@@ -46,9 +50,16 @@ if (android_variants_dir != "" && current_toolchain != host_toolchain) {
     group(target_name) {
       deps = []
       foreach(variant, android_variants) {
+        # See android_gcc_toolchains_helper in //src/gn/toolchain/android/BUILD.gn
+        # which defines android_$target_name and android_clang_$target_name.
+        if (android_clang) {
+          toolos = "android_clang_"
+        } else {
+          toolos = "android_"
+        }
+        target_toolchain = "//src/gn/toolchain/android:$toolos$variant"
         deps += [
-          ":per_arch_$target_name" +
-          "(//src/gn/toolchain/android:android_$variant)"
+          ":per_arch_$target_name(${target_toolchain})"
         ]
       }
     }

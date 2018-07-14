@@ -35,3 +35,27 @@ executable("basic_test") {
     configs += [ "//src/gn/config/win:windowed" ]
   }
 }
+
+executable("gtest") {
+  testonly = true
+
+  sources = [
+    "language_test.cpp"
+  ]
+  deps = [
+    "..:language",
+    "..:command",
+    "..:science",
+    "..:memory",
+    "//src/gn/vendor/vulkansamples",
+    "//src/gn/vendor/googletest",
+  ]
+}
+
+group("test") {
+  testonly = true
+  deps = [
+    ":basic_test",
+    ":gtest",
+  ]
+}

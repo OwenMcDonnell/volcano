@@ -24,6 +24,10 @@ for p in apt-get pacman emerge dnf yum brew port; do
   fi
 done
 if [ -z "$installer" ]; then
+  if [ "$(uname)" == "Darwin" ]; then
+    echo "Please install homebrew: https://brew.sh"
+    exit 1
+  fi
   echo "WARNING: Your system uses an unknown install method."
   installer="unknown"
 fi
@@ -33,41 +37,57 @@ git_pacman="git"
 git_emerge="dev-vcs/git"
 git_dnf="git"
 git_yum="git"
+git_brew="git"
+git_port="git"
 python3_aptget="python3"
 python3_pacman="python3"
 python3_emerge="dev-lang/python-3"
 python3_dnf="python3"
 python3_yum="python3"
+python3_brew="python3"
+python3_port="python3"
 patch_aptget="patch"
 patch_pacman="patch"
 patch_emerge="sys-devel/patch"
 patch_dnf="patch"
 patch_yum="patch"
+patch_brew="patch"
+patch_port="patch"
 pkgconfig_aptget="pkg-config"
 pkgconfig_pacman="pkg-config"
 pkgconfig_emerge="dev-util/pkgconfig"
 pkgconfig_dnf="pkgconfig"
 pkgconfig_yum="pkgconfig"
+pkgconfig_brew="pkg-config"
+pkgconfig_port="pkg-config"
 gcc_cpp_aptget="build-essential"
 gcc_cpp_pacman="base-devel"
 gcc_cpp_emerge="gcc"
 gcc_cpp_dnf="gcc-c++"
 gcc_cpp_yum="gcc-c++"
+gcc_cpp_brew="gcc"
+gcc_cpp_port="gcc"
 clang_format_aptget="clang-format"
 clang_format_pacman="clang"
 clang_format_emerge="sys-devel/llvm"
 clang_format_dnf="clang"
 clang_format_yum="clang"
+clang_format_brew="clang-format"
+clang_format_port="clang-format"
 fontconfig_aptget="libfontconfig1-dev"
 fontconfig_pacman="fontconfig"
 fontconfig_emerge="media-libs/fontconfig"
 fontconfig_dnf="fontconfig-devel"
 fontconfig_yum="fontconfig-devel"
+fontconfig_brew="fontconfig"
+fontconfig_port="fontconfig"
 icu_aptget="libicu-dev"
 icu_pacman="icu"
 icu_emerge="icu"
 icu_dnf="libicu-devel"
 icu_yum="libicu-devel"
+icu4c_brew="icu4c"
+icu4c_port="icu4c"
 mesagl_aptget="libgl1-mesa-dev"
 mesagl_pacman="mesagl"
 mesagl_emerge="eselect-opengl"
@@ -107,34 +127,58 @@ for c in git $python patch pkg-config c++; do
     if [ "$c" == "c++" ]; then
       # the + symbol is an invalid bash variable name
       clist="$clist gcc_cpp"
+    elif [ "$c" == "pkg-config" ]; then
+      # the - symbol is an invalid bash variable name
+      clist="$clist pkgconfig"
     else
       clist="$clist $c"
     fi
   fi
 done
-if ! pkg-config --exists fontconfig; then
-  clist="$clist fontconfig"
-fi
-if ! pkg-config --exists gl; then
-  clist="$clist mesagl"
-fi
-if ! pkg-config --exists glu; then
-  clist="$clist mesaglu"
-fi
-if ! pkg-config --exists xrandr; then
-  clist="$clist xrandr"
-fi
-if ! pkg-config --exists xcursor; then
-  clist="$clist xcursor"
-fi
-if ! pkg-config --exists xinerama; then
-  clist="$clist xinerama"
-fi
-if ! pkg-config --exists xi; then
-  clist="$clist xinput2"
-fi
-if ! pkg-config --exists icu-i18n; then
-  clist="$clist icu"
+
+if [ "$installer" == "brew" ] || [ "$installer" == "port" ]; then
+  # Homebrew and MacPorts install .pc files in places that require setting
+  # PKG_CONFIG_PATH:
+  P="$PKG_CONFIG_PATH"
+  if [ -n "$P" ]; then
+    P="$P:"
+  fi
+  # use two dirname calls to remove "/bin"
+  B=$(dirname $(dirname $(which $installer)))
+  export PKG_CONFIG_PATH="$P$B/opt/icu4c/lib/pkgconfig"
+  if ! pkg-config --exists icu-i18n; then
+    clist="$clist icu4c"
+  else
+    CFLAGS="$CFLAGS $(pkg-config --cflags icu-i18n)"
+    CXXFLAGS="$CXXFLAGS $(pkg-config --cflags icu-i18n)"
+    LDFLAGS="$LDFLAGS $(pkg-config --libs-only-L icu-i18n) -L$B/lib"
+  fi
+else
+  # Suppress all error output because pkg-config might not be installed.
+  if ! pkg-config --exists fontconfig >/dev/null 2>&1; then
+    clist="$clist fontconfig"
+  fi
+  if ! pkg-config --exists gl >/dev/null 2>&1; then
+    clist="$clist mesagl"
+  fi
+  if ! pkg-config --exists glu >/dev/null 2>&1; then
+    clist="$clist mesaglu"
+  fi
+  if ! pkg-config --exists xrandr >/dev/null 2>&1; then
+    clist="$clist xrandr"
+  fi
+  if ! pkg-config --exists xcursor >/dev/null 2>&1; then
+    clist="$clist xcursor"
+  fi
+  if ! pkg-config --exists xinerama >/dev/null 2>&1; then
+    clist="$clist xinerama"
+  fi
+  if ! pkg-config --exists xi >/dev/null 2>&1; then
+    clist="$clist xinput2"
+  fi
+  if ! pkg-config --exists icu-i18n >/dev/null 2>&1; then
+    clist="$clist icu"
+  fi
 fi
 
 if [ -n "$clist" ]; then
@@ -143,22 +187,6 @@ if [ -n "$clist" ]; then
     echo "Please install the following commands before continuing:"
     echo "  $clist"
     ;;
-  brew|port)
-    P="$PKG_CONFIG_PATH"
-    if [ -n "$P" ]; then
-      P="$P:"
-    fi
-    # use two dirname calls to remove "/bin"
-    B=$(dirname $(dirname $(which $installer)))
-    export PKG_CONFIG_PATH="$P$B/opt/icu4c/lib/pkgconfig"
-    if ! pkg-config --exists icu-i18n; then
-      echo "Please $installer install icu4c"
-      exit 1
-    fi
-    CFLAGS="$CFLAGS $(pkg-config --cflags icu-i18n)"
-    CXXFLAGS="$CXXFLAGS $(pkg-config --cflags icu-i18n)"
-    LDFLAGS="$LDFLAGS $(pkg-config --libs-only-L icu-i18n) -L$B/lib"
-    ;;
   *)
     pkglist=""
     for c in $clist; do
@@ -166,16 +194,14 @@ if [ -n "$clist" ]; then
       pkglist="$pkglist ${!i}"
     done
     case $installer in
-    apt-get|dnf|yum)
-      echo "Please $installer install$pkglist"
+    apt-get|dnf|yum|brew|port)
+      installer="$installer install"
       ;;
     pacman)
-      echo "Please pacman -S$pkglist"
-      ;;
-    emerge)
-      echo "Please emerge$pkglist"
+      installer="$installer -S"
       ;;
     esac
+    echo "Please $installer$pkglist"
     exit 1
     ;;
   esac
@@ -216,13 +242,14 @@ if [ $RV -ne 0 ]; then
     echo "  add submod \"update-index\" $b @ $a"
     git update-index --add --cacheinfo 160000 "$a" "$b"
   done <<EOF
+51cbda5f30e56c801c07fe3d3aba5d7fb9e6cca4 vendor/cereal
 0d4534733b7a748a21a1b1177bb37a9b224e3582 vendor/glfw
 93c0c449dab34039800d00dd7e36aba98fa59b49 vendor/gli
 fd920b3b6a9ccc9a327a014f9d73ef4da0812e57 vendor/glslang
 06ef95c004ba8b6b38e152e8816d5c069772a601 vendor/skia
-cae17224a075573572dfaf54192002cb413b5558 vendor/spirv_cross
-18d8101003c1ff691bfb58af47faf1e82e58083c vendor/subgn
-5b2d09510cb3e6c98cdac695188e331f5446163c vendor/vulkansamples
+08336e7bbb3af537ea1ce72f3e0482c2144157ed vendor/spirv_cross
+d83d04900d9bb4db6b5b55812d923be75a921140 vendor/subgn
+eb0504823050186f63d4a820d76bc098b10cc4c5 vendor/vulkansamples
 EOF
   git commit -q -m "repo was downloaded without .git, build.cmd rebuilt it"
 fi
@@ -307,6 +334,11 @@ if ! grep -q 'HeaderDesc\.format\.flags = Storage\.layers() > 1 ? [^ ][^ ]* : '\
   missing="$missing patch-gli"
 fi
 
+if ! grep -q 'CEREAL_CUSTOM_CEREALABORT' \
+vendor/cereal/include/cereal/macros.hpp; then
+  missing="$missing patch-cereal"
+fi
+
 missing="$missing git-sync-deps install-gn-ninja"
 echo "volcano updating:$missing"
 
@@ -365,7 +397,7 @@ EOF
     patch --no-backup-if-mismatch -p1 <<EOF
 --- a/vendor/spirv_cross/spirv_common.hpp
 +++ b/vendor/spirv_cross/spirv_common.hpp
-@@ -32,6 +32,9 @@
+@@ -34,6 +34,9 @@
  #include <unordered_set>
  #include <utility>
  #include <vector>
@@ -375,7 +407,7 @@ EOF
  
  namespace spirv_cross
  {
-@@ -43,6 +46,9 @@ namespace spirv_cross
+@@ -45,6 +48,9 @@ namespace spirv_cross
      inline void
      report_and_abort(const std::string &msg)
  {
@@ -385,7 +417,7 @@ EOF
  #ifdef NDEBUG
  	(void)msg;
  #else
-@@ -50,6 +56,7 @@ namespace spirv_cross
+@@ -52,6 +58,7 @@ namespace spirv_cross
  #endif
  	fflush(stderr);
  	abort();
@@ -393,7 +425,7 @@ EOF
  }
  
  #define SPIRV_CROSS_THROW(x) report_and_abort(x)
-@@ -116,7 +123,9 @@ inline std::string merge(const std::vector<std::string> &list)
+@@ -237,7 +244,9 @@ inline std::string merge(const std::vector<std::string> &list)
  template <typename T>
  inline std::string convert_to_string(T &&t)
  {
@@ -492,6 +524,36 @@ EOF
 '\1detail::D3DFORMAT(\2),' vendor/gli/gli/core/save_dds.inl
     # macOS sed leaves files behind
     rm -f vendor/gli/gli/core/save_dds.inl-e
+    ;;
+
+  patch-cereal)
+    patch -p1 <<EOF
+--- a/vendor/cereal/include/cereal/macros.hpp
++++ b/vendor/cereal/include/cereal/macros.hpp
+@@ -44,6 +44,18 @@
+ #ifndef CEREAL_MACROS_HPP_
+ #define CEREAL_MACROS_HPP_
+ 
++#ifndef CEREAL_CUSTOM_CEREALABORT
++#include <stdlib.h>
++inline void cerealAbortFn(const char* file, unsigned long line, const char* str) {
++  fprintf(stderr, "%s:%lu: %s\n", file, line, str);
++  abort();
++}
++inline void cerealAbortFn(const char* file, unsigned long line, const std::string& str) {
++  cerealAbortFn(file, line, str.c_str());
++}
++#define cerealAbort(x) cerealAbortFn(__FILE__, __LINE__, x);
++#endif // cerealAbort
++
+ #ifndef CEREAL_THREAD_SAFE
+ //! Whether cereal should be compiled for a threaded environment
+ /*! This macro causes cereal to use mutexes to control access to
+EOF
+    find vendor/cereal/include -type f -exec \
+        sed -i -e 's/throw Exception(/cerealAbort(/' {} +
+    # macOS sed leaves files behind
+    find vendor/cereal/include -name '*-e' -exec rm {} +
     ;;
   *)
     echo "ERROR: unknown buildstep \"$buildstep\""
@@ -614,14 +676,55 @@ if [ "$(uname)" == "Darwin" ]; then
       git clone https://github.com/KhronosGroup/MoltenVK
     fi
     cd MoltenVK
-    git checkout a911b6324734858dd448e289f458e8d8e31162af
-    # Patch MoltenVK/icd/MoltenVK_icd.json
+    git checkout 77a5571edaf1927630616472ad20d88805452704
+    # Patch MoltenVK
     if grep -q 'library_path": "\./libMoltenVK\.dylib' \
         MoltenVK/icd/MoltenVK_icd.json; then
       sed -i -e 's0\("library_path": "\)\./\(libMoltenVK\.dylib",\)$0\1\20' \
         MoltenVK/icd/MoltenVK_icd.json
       # macOS sed leaves files behind
       rm -f MoltenVK/icd/MoltenVK_icd.json-e
+      patch -p1 <<EOF
+--- a/MoltenVK/MoltenVK/GPUObjects/MVKPipeline.mm
++++ b/MoltenVK/MoltenVK/GPUObjects/MVKPipeline.mm
+@@ -569,7 +569,7 @@ protected:
+ VkResult MVKPipelineCache::writeData(size_t* pDataSize, void* pData) {
+ 	lock_guard<mutex> lock(_shaderCacheLock);
+ 
+-	try {
++	{
+ 
+ 		if ( !pDataSize ) { return VK_SUCCESS; }
+ 
+@@ -595,9 +595,6 @@ VkResult MVKPipelineCache::writeData(size_t* pDataSize, void* pData) {
+ 			return VK_SUCCESS;
+ 		}
+ 
+-	} catch (cereal::Exception& ex) {
+-		*pDataSize = 0;
+-		return mvkNotifyErrorWithText(VK_INCOMPLETE, "Error writing pipeline cache data: %s", ex.what());
+ 	}
+ }
+ 
+@@ -644,7 +641,7 @@ void MVKPipelineCache::writeData(ostream& outstream, bool isCounting) {
+ // Loads any data indicated by the creation info.
+ // This is the compliment of the writeData() function. The two must be kept aligned.
+ void MVKPipelineCache::readData(const VkPipelineCacheCreateInfo* pCreateInfo) {
+-	try {
++	{
+ 
+ 		size_t byteCount = pCreateInfo->initialDataSize;
+ 		uint32_t cacheEntryType;
+@@ -710,8 +707,6 @@ void MVKPipelineCache::readData(const VkPipelineCacheCreateInfo* pCreateInfo) {
+ 			}
+ 		}
+ 
+-	} catch (cereal::Exception& ex) {
+-		setConfigurationResult(mvkNotifyErrorWithText(VK_SUCCESS, "Error reading pipeline cache data: %s", ex.what()));
+ 	}
+ }
+ 
+EOF
     fi
   )
 fi

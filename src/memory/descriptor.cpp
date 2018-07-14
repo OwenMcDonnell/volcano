@@ -36,7 +36,7 @@ int DescriptorPool::ctorError(
   info.pPoolSizes = poolSizes.data();
   info.maxSets = maxSets;
 
-  vk.reset();
+  vk.reset(dev.dev);
   VkResult v = vkCreateDescriptorPool(dev.dev, &info, dev.dev.allocator, &vk);
   if (v != VK_SUCCESS) {
     logE("%s failed: %d (%s)\n", "vkCreateDescriptorPool", v,
@@ -61,7 +61,29 @@ int DescriptorSetLayout::ctorError(
   info.bindingCount = bindings.size();
   info.pBindings = bindings.data();
 
-  vk.reset();
+#if VK_HEADER_VERSION != 74
+/* Fix the excessive #ifndef __ANDROID__ below to just use the Android Loader
+ * once KhronosGroup lands support. */
+#error KhronosGroup update detected, splits Vulkan-LoaderAndValidationLayers
+#endif
+#ifndef __ANDROID__
+  if (dev.apiVersionInUse() >= VK_MAKE_VERSION(1, 1, 0)) {
+    // Check vkGetDescriptorSetLayoutSupport first, and spit out its hints.
+    // TODO: VkDescriptorSetVariableDescriptorCountLayoutSupportEXT
+    VkDescriptorSetLayoutSupport VkInit(support);
+    vkGetDescriptorSetLayoutSupport(dev.dev, &info, &support);
+    if (!support.supported) {
+      logW("%s may fail: see https://www.khronos.org Vulkan API docs about\n",
+           "vkCreateDescriptorSetLayout");
+      logW("    vkGetDescriptorSetLayoutSupport: a VkDescriptorSetLayout\n");
+      logW("    has exceeded maxPerSetDescriptors = %llu, and also exceeded\n",
+           (unsigned long long)dev.physProp.maint3.maxPerSetDescriptors);
+      logW("    an implementation-specific limit as well.\n");
+    }
+  }
+#endif /* __ANDROID__ */
+
+  vk.reset(dev.dev);
   VkResult v =
       vkCreateDescriptorSetLayout(dev.dev, &info, dev.dev.allocator, &vk);
   if (v != VK_SUCCESS) {

@@ -220,7 +220,7 @@ config("common_linker_setup") {
 # Control Flow Guard (CFG)
 # https://msdn.microsoft.com/en-us/library/windows/desktop/mt637065.aspx
 config("win_msvc_cfg") {
-  # /DYNAMICBASE (ASLR) is turned off in debug builds, therefore CFG can’t be
+  # /DYNAMICBASE (ASLR) is turned off in debug builds, therefore CFG can't be
   # turned on either.
   if (!is_clang && !is_debug) {
     cflags = [ "/guard:cf" ]

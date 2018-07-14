@@ -13,28 +13,46 @@
 namespace language {
 using namespace VkEnum;
 
-const char VK_LAYER_LUNARG_standard_validation[] =
-    "VK_LAYER_LUNARG_standard_validation";
-
 namespace {  // an anonymous namespace hides its contents outside this file
+
+int explainCreateInstanceFail(VkResult v) {
+  if (v != VK_SUCCESS) {
+    logE("%s failed: %d (%s)\n", "vkCreateInstance", v, string_VkResult(v));
+    if (v == VK_ERROR_INCOMPATIBLE_DRIVER) {
+      logE("Most likely cause: your GPU does not support Vulkan yet.\n");
+      logE("You may try updating your graphics driver.\n");
+    } else if (v == VK_ERROR_OUT_OF_HOST_MEMORY) {
+      logE(
+          "Primary cause: you *might* be out of memory (unlikely).\n"
+          "Secondary causes: conflicting vulkan drivers installed.\n"
+          "Secondary causes: broken driver installation.\n"
+          "You may want to search the web for more information.\n");
+    }
+    return 1;
+  }
+  return 0;
+}
 
 int initInstance(Instance& inst,
                  const std::vector<std::string>& enabledExtensions,
-                 std::vector<VkLayerProperties>& layers) {
-  std::vector<const char*> enabledLayers;
-  for (const auto& layerprop : layers) {
-    // Enable instance layer "VK_LAYER_LUNARG_standard_validation"
-    // TODO: permit customization of the enabled instance layers.
-    //
-    // Getting validation working involves more than just enabling the layer!
-    // https://github.com/KhronosGroup/Vulkan-LoaderAndValidationLayers/tree/master/layers
-    // 1. Copy libVkLayer_<name>.so to the same dir as your binary, or
-    //    set VK_LAYER_PATH to point to where the libVkLayer_<name>.so is.
-    // 2. Create a vk_layer_settings.txt file next to libVkLayer_<name>.so.
-    // 3. Set the environment variable VK_INSTANCE_LAYERS to activate layers:
-    //    export VK_INSTANCE_LAYERS=VK_LAYER_LUNARG_standard_validation
-    if (!strcmp(VK_LAYER_LUNARG_standard_validation, layerprop.layerName)) {
-      enabledLayers.push_back(layerprop.layerName);
+                 std::vector<VkLayerProperties>& availLayerProp) {
+  std::set<std::string> avail;
+  for (const auto& prop : availLayerProp) {
+    auto r = avail.emplace(prop.layerName);
+    if (!r.second) {
+      logW("Instance::ctorError: VkLayerProperties \"%s\" is dup\n",
+           prop.layerName);
+    }
+  }
+
+  // Remove any inst.enabledLayers not in avail, and build a vector of char*
+  std::vector<const char*> enabledLayersChar;
+  for (auto i = inst.enabledLayers.begin(); i != inst.enabledLayers.end();) {
+    if (!avail.count(*i)) {
+      i = inst.enabledLayers.erase(i);
+    } else {
+      enabledLayersChar.push_back(i->c_str());
+      i++;
     }
   }
 
@@ -48,27 +66,11 @@ int initInstance(Instance& inst,
     }
     iinfo.ppEnabledExtensionNames = extPointers.data();
   }
-  iinfo.enabledLayerCount = enabledLayers.size();
-  iinfo.ppEnabledLayerNames = enabledLayers.data();
-  iinfo.enabledLayerCount = 0;
+  iinfo.enabledLayerCount = enabledLayersChar.size();
+  iinfo.ppEnabledLayerNames = enabledLayersChar.data();
 
-  VkResult v = vkCreateInstance(&iinfo, inst.pAllocator, &inst.vk);
-  if (v != VK_SUCCESS) {
-    logE("%s failed: %d (%s)\n", "vkCreateInstance", v, string_VkResult(v));
-    if (v == VK_ERROR_INCOMPATIBLE_DRIVER) {
-      logE(
-          "Most likely cause: your GPU does not support Vulkan yet.\n"
-          "You may try updating your graphics driver.\n");
-    } else if (v == VK_ERROR_OUT_OF_HOST_MEMORY) {
-      logE(
-          "Primary cause: you *might* be out of memory (unlikely).\n"
-          "Secondary causes: conflicting vulkan drivers installed.\n"
-          "Secondary causes: broken driver installation.\n"
-          "You may want to search the web for more information.\n");
-    }
-    return 1;
-  }
-  return 0;
+  return explainCreateInstanceFail(
+      vkCreateInstance(&iinfo, inst.pAllocator, &inst.vk));
 }
 
 }  // anonymous namespace
@@ -78,40 +80,49 @@ Instance::Instance() {
   engineName = "github.com/ndsol/volcano";
 
   VkOverwrite(applicationInfo);
-  applicationInfo.apiVersion = VK_API_VERSION_1_0;
+  // Vulkan 1.1 is the highest API Volcano supports right now.
+  applicationInfo.apiVersion = VK_MAKE_VERSION(1, 1, 0);
   applicationInfo.pApplicationName = applicationName.c_str();
   applicationInfo.applicationVersion = VK_MAKE_VERSION(0, 1, 0);
   applicationInfo.pEngineName = engineName.c_str();
-
-  VkOverwrite(features);
-  // Attempt to enable, if supported, features supported by all the below.
-  // NOTE: textureCompression features are not supported by all devices, but
-  // some are supported by any one device; the app must choose a supported one:
-  // * Adreno 330 driver 26.24.512, android 7.0.
-  // * Radeon R7 200 driver 1.4.0, ubuntu 16.04 x86_64.
-  // * GeForce 840M driver 378.13.0.0, arch x86_64.
-  features.inheritedQueries = VK_TRUE;
-  features.robustBufferAccess = VK_TRUE;
-  features.samplerAnisotropy = VK_TRUE;
-  features.occlusionQueryPrecise = VK_TRUE;
-  features.textureCompressionETC2 = VK_TRUE;
-  features.textureCompressionASTC_LDR = VK_TRUE;
-  features.textureCompressionBC = VK_TRUE;
 }
 
-int Instance::ctorError(const char** requiredExtensions,
-                        size_t requiredExtensionCount,
-                        CreateWindowSurfaceFn createWindowSurface,
+int Instance::ctorError(CreateWindowSurfaceFn createWindowSurface,
                         void* window) {
-  InstanceExtensionChooser instanceExtensions;
-  for (size_t i = 0; i < requiredExtensionCount; i++) {
-    if (requiredExtensions[i] == nullptr) {
-      logE("invalid requiredExtensions[%zu]\n", i);
-      return 1;
-    }
-    instanceExtensions.required.emplace_back(requiredExtensions[i]);
-  }
+  InstanceExtensionChooser instanceExtensions(*this);
   if (instanceExtensions.choose()) return 1;
+
+  // Enable no layers. Just get a VkInstance to call vkEnumerateInstanceVersion
+  VkPtr<VkInstance> earlyVk{vkDestroyInstance};
+  VkInstanceCreateInfo VkInit(iinfo);
+  VkApplicationInfo earlyAppInfo = applicationInfo;
+  earlyAppInfo.apiVersion = VK_API_VERSION_1_0;
+  iinfo.pApplicationInfo = &earlyAppInfo;
+  VkResult v = vkCreateInstance(&iinfo, pAllocator, &earlyVk);
+  if (explainCreateInstanceFail(v)) {
+    return 1;
+  }
+
+  // Check what Vulkan API version is available.
+  PFN_vkEnumerateInstanceVersion EnumerateInstanceVersion =
+      (PFN_vkEnumerateInstanceVersion)vkGetInstanceProcAddr(
+          earlyVk, "vkEnumerateInstanceVersion");
+  if (!EnumerateInstanceVersion) {
+    applicationInfo.apiVersion = VK_API_VERSION_1_0;
+  } else {
+    v = EnumerateInstanceVersion(&applicationInfo.apiVersion);
+    if (v != VK_SUCCESS) {
+      logE("vkEnumerateInstanceVersion failed: %d (%s). Falling back to 1.0.\n",
+           v, string_VkResult(v));
+      applicationInfo.apiVersion = VK_API_VERSION_1_0;
+    }
+  }
+  // Vulkan 1.1 is the highest API Volcano supports right now.
+  if (applicationInfo.apiVersion >= VK_MAKE_VERSION(1, 1, 0)) {
+    applicationInfo.apiVersion = VK_MAKE_VERSION(1, 1, 0);
+  }
+  // Destroy the early VkInstance used to check the API version.
+  earlyVk.reset();
 
   int r;
   {
@@ -125,10 +136,11 @@ int Instance::ctorError(const char** requiredExtensions,
 
   if ((r = initDebug()) != 0) return r;
 
-  VkResult v = createWindowSurface(*this, window);
-  if (v != VK_SUCCESS) {
-    logE("%s failed: %d (%s)", "createWindowSurface (the user-provided fn)", v,
-         string_VkResult(v));
+  // surface.inst == VK_NULL_HANDLE, and needs to be reset to use vk.
+  surface.reset(vk);
+  if ((v = createWindowSurface(*this, window)) != VK_SUCCESS) {
+    logE("%s failed: %d (%s)\n", "createWindowSurface (the user-provided fn)",
+         v, string_VkResult(v));
     return 1;
   }
   surface.allocator = pAllocator;
@@ -136,13 +148,28 @@ int Instance::ctorError(const char** requiredExtensions,
   std::vector<VkPhysicalDevice>* physDevs = Vk::getDevices(vk);
   if (physDevs == nullptr) return 1;
 
+  // Check all devices for lowest API version supported before creating any dev
+  // If user-set minApiVersion is higher, use that.
+  // minApiVersion of 0 will use the autodetected apiVersion.
+  if (minApiVersion > 0 && minApiVersion < applicationInfo.apiVersion) {
+    logE("Instance supports apiVersion %x, you set minApiVersion=%x.\n",
+         applicationInfo.apiVersion, minApiVersion);
+    logE("Driver does not support the requested minApiVersion.\n");
+    return 1;
+  }
+  detectedApiVersionInUse = applicationInfo.apiVersion;
   for (const auto& phys : *physDevs) {
-    auto* vkQFams = Vk::getQueueFamilies(phys);
-    if (vkQFams == nullptr) {
-      delete physDevs;
-      return 1;
+    // Just use Vulkan 1.0.x API to get apiVersion.
+    VkPhysicalDeviceProperties VkInit(physProp);
+    vkGetPhysicalDeviceProperties(phys, &physProp);
+    if (physProp.apiVersion < detectedApiVersionInUse &&
+        physProp.apiVersion >= minApiVersion) {
+      detectedApiVersionInUse = physProp.apiVersion;
     }
+  }
 
+  uint32_t highestRejected = 0;
+  for (const auto& phys : *physDevs) {
     // Construct a new dev.
     //
     // Be careful to also call pop_back() unless initSupportedQueues()
@@ -150,34 +177,54 @@ int Instance::ctorError(const char** requiredExtensions,
     devs.emplace_back(surface ? new Device{surface}
                               : new Device{VK_NULL_HANDLE});
     Device& dev = *devs.back();
+    dev.inst = this;
     dev.phys = phys;
-    vkGetPhysicalDeviceProperties(phys, &dev.physProp);
-    vkGetPhysicalDeviceMemoryProperties(dev.phys, &dev.memProps);
+    if (dev.physProp.getProperties(dev)) {
+      logE("Instance::ctorError: physProp.getProperties failed\n");
+      delete physDevs;
+      return 1;
+    }
+    if (dev.memProps.getProperties(dev)) {
+      logE("Instance::ctorError: memProp.getProperties failed\n");
+      delete physDevs;
+      return 1;
+    }
 
-    VkResult r = initSupportedQueues(dev, *vkQFams);
-    delete vkQFams;
-    if (r != VK_SUCCESS) {
-      devs.pop_back();
-      if (r != VK_ERROR_DEVICE_LOST) {
+    VkResult r = initSupportedQueues(dev);
+    switch (r) {
+      case VK_SUCCESS:
+        break;
+
+      case VK_ERROR_DEVICE_LOST:
+        devs.pop_back();
+        break;
+
+      case VK_INCOMPLETE:
+        // This error will never be sent by a Vulkan API.
+        // It just means minApiVersion blocked this device.
+        if (highestRejected < dev.physProp.properties.apiVersion) {
+          highestRejected = dev.physProp.properties.apiVersion;
+        }
+        devs.pop_back();
+        break;
+
+      default:
+        devs.pop_back();
         delete physDevs;
         return 1;
-      }
     }
   }
   delete physDevs;
 
   if (devs.size() == 0) {
-    logE(
-        "No Vulkan-capable devices found on your system.\n"
-        "Try running vulkaninfo to troubleshoot.\n");
-    return 1;
-  }
-
-  if (dbg_lvl > 0) {
-    logD("%zu physical device%s:\n", devs.size(), devs.size() != 1 ? "s" : "");
-    for (size_t n = 0; n < devs.size(); n++) {
-      logD("  [%zu] \"%s\"\n", n, devs.at(n)->physProp.deviceName);
+    logE("No Vulkan-capable devices found on your system.\n");
+    if (highestRejected > 0) {
+      logE("Volcano Instance.minApiVersion=%x > any device: %x supported\n",
+           minApiVersion, highestRejected);
+    } else {
+      logE("Try running vulkaninfo to troubleshoot.\n");
     }
+    return 1;
   }
   return r;
 }

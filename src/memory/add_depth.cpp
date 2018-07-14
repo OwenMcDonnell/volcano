@@ -115,22 +115,24 @@ int Device::addOrUpdateFramebufs(std::vector<VkImage>& images,
       depthImage->info.extent = {1, 1, 1};
       depthImage->info.extent.width = swapChainInfo.imageExtent.width;
       depthImage->info.extent.height = swapChainInfo.imageExtent.height;
-      if (depthImage->ctorDeviceLocal(*this) || depthImage->bindMemory(*this)) {
-        logE("depthImage->ctorError failed\n");
+      if (depthImage->ctorDeviceLocal() || depthImage->bindMemory()) {
+        logE("depthImage->ctorError or bindMemory failed\n");
         return 1;
       }
 
-      command::CommandBuffer::BarrierSet bset;
-      bset.img.emplace_back(depthImage->makeTransition(
-          VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL));
-      depthImage->currentLayout =
-          VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-      // Transitioning to a depth format only affects the depth test stage
-      // fixed function, so use VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT.
-      if (setup.barrier(bset, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                        VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT)) {
+      if (setup.barrier(*depthImage,
+                        VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL)) {
         return 1;
       }
+      // Transitioning to a depth format only affects the depth test stage
+      // fixed function, so use VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT.
+      //
+      // Changing the srcStageMask or dstStageMask requires some care -
+      // setup.lazyBarriers is not added to the CommandBuffer until some other
+      // command is done to setup - which in this case is the submit() call that
+      // automatically happens because setup is a SmartCommandBuffer.
+      setup.lazyBarriers.dstStageMask =
+          VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
     }
 
     framebuf.image.emplace_back(depthImage->vk);
@@ -164,6 +166,14 @@ Device::~Device() {
   if (depthImage) {
     delete depthImage;
     depthImage = nullptr;
+  }
+  if (vmaAllocator) {
+#ifdef VOLCANO_DISABLE_VULKANMEMORYALLOCATOR
+    logE("~Device: vmaAllocator should be NULL. Memory corruption detected.");
+#else  /*VOLCANO_DISABLE_VULKANMEMORYALLOCATOR*/
+    vmaDestroyAllocator(vmaAllocator);
+    vmaAllocator = VK_NULL_HANDLE;
+#endif /*VOLCANO_DISABLE_VULKANMEMORYALLOCATOR*/
   }
 }
 

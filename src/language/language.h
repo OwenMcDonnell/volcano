@@ -9,8 +9,8 @@
  * initialization of the VkInstance, devices, queue selection, and extension
  * selection.
  *
- * Note: src/language attempts to avoid needing a "whole app INI or config"
- *       solution. This avoids pulling in an unnecessary dependency.
+ * Note: src/language attempts to avoid needing a "whole app INI or config
+ *       library" to avoid adding unnecessary complexity.
  *
  * For example, the following code uses src/language to create a vulkan window:
  *
@@ -40,7 +40,10 @@
  *   unsigned int glfwExtCount = 0;
  *   const char** glfwExts = glfwGetRequiredInstanceExtensions(&glfwExtCount);
  *   language::Instance inst;
- *   if (inst.ctorError(glfwExts, glfwExtCount, createWindowSurface, window)) {
+ *   for (unsigned int i = 0; i < glfwExtCount; i++) {
+ *     inst.requiredExtensions.push_back(glfwExts[i]);
+ *   }
+ *   if (inst.ctorError(createWindowSurface, window)) {
  *     return 1;
  *   }
  *   if (inst.open({WIDTH, HEIGHT})) {
@@ -56,12 +59,18 @@
  */
 
 #include <memory>
+#include <mutex>
 #include <set>
 #include <string>
 #include <vector>
-#include "VkPtr.h"
+#include "structs.h"
 
 #pragma once
+
+// Forward decliaration of VmaAllocator for Device and memory.h.
+// Only used if vulkanmemoryallocator is enabled in memory.h; otherwise does
+// nothing.
+VK_DEFINE_HANDLE(VmaAllocator);
 
 namespace command {
 // Forward declaration of CommandPool for resetSwapChain().
@@ -76,23 +85,6 @@ typedef struct Image Image;
 
 namespace language {
 
-#if defined(COMPILER_GCC) || defined(__clang__)
-#define WARN_UNUSED_RESULT __attribute__((warn_unused_result))
-#elif defined(COMPILER_MSVC)
-#define WARN_UNUSED_RESULT _Check_return_
-#else
-#define WARN_UNUSED_RESULT
-#endif
-
-// For debugging src/language: set language::dbg_lvl to control logging at
-// runtime.
-extern int dbg_lvl;
-
-extern const char VK_LAYER_LUNARG_standard_validation[];
-
-// Forward declaration of Device for ImageView and Framebuffer.
-struct Device;
-
 // ImageView wraps VkImageView. A VkImageView is required when using a VkImage
 // to enable subresources within a single VkImage. Vulkan makes subresources and
 // aliasing (two VkImageViews that overlap) possible by making the ImageView
@@ -105,7 +97,7 @@ typedef struct ImageView {
   ImageView(ImageView&&) = default;
   ImageView(const ImageView&) = delete;
 
-  // ctorError() must be called with a valid VkImage for this to reference.
+  // ctorError() must be called with a valid VkImage for this to refer to.
   // Your application may customize this->info before calling ctorError().
   WARN_UNUSED_RESULT int ctorError(Device& dev, VkImage image, VkFormat format);
 
@@ -158,42 +150,8 @@ typedef struct Framebuf {
   bool depthImageViewAt1{false};
 } Framebuf;
 
-// SurfaceSupport encodes the result of vkGetPhysicalDeviceSurfaceSupportKHR().
-// As an exception, the GRAPHICS value is used to request a QueueFamily
-// with vk.queueFlags & VK_QUEUE_GRAPHICS_BIT in Instance::requestQfams() and
-// Device::getQfamI().
-//
-// TODO: Add COMPUTE.
-// GRAPHICS and COMPUTE support are not tied to a surface, but volcano makes the
-// simplifying assumption that all these bits can be lumped together here.
-enum SurfaceSupport {
-  UNDEFINED = 0,
-  NONE = 1,
-  PRESENT = 2,
-
-  GRAPHICS = 0x1000,  // Special case. Not used in struct QueueFamily.
-};
-
-// QueueFamily wraps VkQueueFamilyProperties. QueueFamily also gives whether the
-// QueueFamily can be used to "present" on the app surface (i.e. swap a surface
-// to the screen if surfaceSupport == PRESENT).
-typedef struct QueueFamily {
-  QueueFamily(const VkQueueFamilyProperties& vk, SurfaceSupport surfaceSupport)
-      : vk(vk), surfaceSupport(surfaceSupport) {}
-  QueueFamily(QueueFamily&&) = default;
-  QueueFamily(const QueueFamily&) = delete;
-
-  VkQueueFamilyProperties vk;
-  const SurfaceSupport surfaceSupport;
-  inline bool isGraphics() const {
-    return vk.queueFlags & VK_QUEUE_GRAPHICS_BIT;
-  }
-
-  // Populated only after open().
-  std::vector<float> prios;
-  // Populated only after open().
-  std::vector<VkQueue> queues;
-} QueueFamily;
+// Forward declaration of Instance for Device and InstanceExtensionChooser.
+class Instance;
 
 // Device is explicitly used almost everywhere. A Device is created after the
 // Vulkan driver decides you have hardware that can support Vulkan. Device has
@@ -204,9 +162,8 @@ typedef struct QueueFamily {
 //
 // Take care to observe the notes about Device::swapChainInfo below.
 //
-// Device has a list, qfams, of QueueFamily supported by the physical devices.
-// Instance::initQueues() populates Instance::devs with Device::phys and
-// Device::qfams.
+// Device has a qfams list of what is supported by the physical devices.
+// Instance::initQueues() chooses which queues to actually use.
 typedef struct Device {
   Device(VkSurfaceKHR surface);
   Device(Device&&) = default;
@@ -219,32 +176,44 @@ typedef struct Device {
   // Physical Device. Populated after ctorError().
   VkPhysicalDevice phys = VK_NULL_HANDLE;
 
-  // Properties, like device name. Populated after ctorError().
-  VkPhysicalDeviceProperties physProp;
+  // physProp is properties like device name. Populated after ctorError().
+  PhysicalDeviceProperties physProp;
 
   // Features, like samplerAnisotropy. Populated after ctorError().
-  VkPhysicalDeviceFeatures enabledFeatures;
+  DeviceFeatures availableFeatures;
+
+  // Features, like samplerAnisotropy. Populated after open().
+  //
+  // Note: your app should set the bits it wants enabled before calling open().
+  // After open(), your app should check that the feature bit is still set
+  // (meaning that the request was successful).
+  DeviceFeatures enabledFeatures;
 
   // Memory properties like memory type. Populated after ctorError().
-  VkPhysicalDeviceMemoryProperties memProps;
+  DeviceMemoryProperties memProps;
 
   // Device extensions to choose from. Populated after ctorError().
   std::vector<VkExtensionProperties> availableExtensions;
 
   // qfams is populated after ctorError() but qfams.queue is populated
   // only after open().
-  std::vector<QueueFamily> qfams;
+  std::vector<QueueFamilyProperties> qfams;
+
   // getQfamI() is a convenience method to get the queue family index that
   // supports the given SurfaceSupport. Returns (size_t) -1 on error.
   size_t getQfamI(SurfaceSupport support) const;
 
-  // Request device extensions by adding to extensionRequests before open().
-  std::vector<const char*> extensionRequests;
+  // Request device extensions by adding to requiredExtensions before open().
+  // After open() this is the list of active device extensions.
+  // Note that VK_KHR_SWAPCHAIN_EXTENSION_NAME is added automatically.
+  std::vector<const char*> requiredExtensions;
 
   // surfaceFormats is populated by Instance as soon as the Device is created.
   std::vector<VkSurfaceFormatKHR> surfaceFormats;
+
   // presetModes is populated by Instance as soon as the Device is created.
   std::vector<VkPresentModeKHR> presentModes;
+
   // swapChainInfo is populated by the Device constructor. Your application can
   // customize all but the fields below, then call open() which calls
   // resetSwapChain, which consumes swapChainInfo.
@@ -266,20 +235,16 @@ typedef struct Device {
            (float)swapChainInfo.imageExtent.height;
   }
 
-  // formatProperties is a convenience wrapper around
-  // vkGetPhysicalDeviceFormatProperties.
-  WARN_UNUSED_RESULT VkFormatProperties formatProperties(VkFormat format) {
-    VkFormatProperties props;
-    vkGetPhysicalDeviceFormatProperties(phys, format, &props);
-    return props;
-  }
-
   // chooseFormat is a convenience method to select the first matching format
   // that has the given tiling and feature flags.
   // If no format meets the criteria, VK_FORMAT_UNDEFINED is returned.
   WARN_UNUSED_RESULT VkFormat chooseFormat(VkImageTiling tiling,
                                            VkFormatFeatureFlags flags,
                                            const std::vector<VkFormat>& fmts);
+
+  // isExtensionAvailable is a convenience method to check if a string is in
+  // the availableExtensions vector. The string must match exactly.
+  int isExtensionAvailable(const char* name);
 
   // getSurfaceCapabilities is a convenience method for retrieving the physical
   // device surface info from vkGetPhysicalDeviceSurfaceCapabilitiesKHR.
@@ -293,6 +258,10 @@ typedef struct Device {
   VkPtr<VkSwapchainKHR> swapChain{dev, vkDestroySwapchainKHR};
   // framebufs is populated after resetSwapChain() and open().
   std::vector<Framebuf> framebufs;
+
+  // Only used if memory.h enables vulkanmemoryallocator.
+  VmaAllocator vmaAllocator{VK_NULL_HANDLE};
+  std::recursive_mutex lockmutex;
 
   // resetSwapChain() re-initializes swapChain with the updated
   // swapChainInfo.imageExtent that should have just been populated. It also
@@ -311,14 +280,39 @@ typedef struct Device {
   // GetDepthFormat can be used to detect if addDepthImage() was ever called.
   VkFormat GetDepthFormat() const { return depthFormat; };
 
+  // setFrameNumber is required by vulkanmemoryallocator if the CAN_BECOME_LOST
+  // feature is used. In order to keep it simple, just pass in the frameNumber
+  // each frame regardless. If you use
+  // science::CommandPoolContainer::acquireNextImage(), it calls
+  // Device::setFrameNumber() for you.
+  void setFrameNumber(uint32_t frameNumber);
+
+  // apiVersionInUse reports the lowest apiVersion from instance and all devs.
+  uint32_t apiVersionInUse() const;
+
+  // apiUsage will logW(fmt) if pred is true and the API is not supported.
+  void apiUsage(int v1, int v2, int v3, bool pred, const char* fmt, ...)
+      VOLCANO_PRINTF(6, 7);
+
+  // extensionUsage will logW(fmt) if pred is true and the extension is not
+  // loaded (this checks device AND instance extensions).
+  void extensionUsage(const char* name, bool pred, const char* fmt, ...)
+      VOLCANO_PRINTF(4, 5);
+
  protected:
   friend struct command::Pipeline;
+  friend class Instance;
+
   // depthFormat is set by Pipeline::addDepthImage() to communicate with
   // resetSwapChain() and addOrUpdateFramebufs().
   VkFormat depthFormat{VK_FORMAT_UNDEFINED};
+
   // depthImage is set in addOrUpdateFramebufs(). One Image is used among all
   // framebufs without any concurrency issues.
   memory::Image* depthImage{nullptr};
+
+  language::Instance* inst{nullptr};
+
   // addOrUpdateFramebufs updates framebufs preserving existing FrameBuf
   // elements and adding new ones.
   //
@@ -352,9 +346,13 @@ typedef struct QueueRequest {
 
 // InstanceExtensionChooser enumerates available extensions and chooses the
 // extensions to submit during Instance::ctorError().
+//
+// The InstanceExtensionChooser is not exposed for your app to customize yet.
+// Typical apps can just add strings to Instance::requiredExtensions.
 typedef struct InstanceExtensionChooser {
-  // Construct an InstanceExtensionChooser.
-  InstanceExtensionChooser() {}
+  // Construct an InstanceExtensionChooser and initialize with the list of
+  // required extensions.
+  InstanceExtensionChooser(Instance& inst);
   virtual ~InstanceExtensionChooser();
 
   // choose generates the chosen vector using the extension names populated in
@@ -404,12 +402,7 @@ typedef struct InstanceExtensionChooser {
 //                  https://forums.khronos.org/showthread.php/13172
 //
 // It _is_ a good idea however to use multiple threads to build command queues.
-// And a multi-GPU system could in theory have multiple GRAPHICS queues (but
-// Vulkan 1.0 does not have a final multi-GPU standard yet:
-// https://lunarg.com/faqs/vulkan-multiple-gpus-acceleration/
-// but there are extensions being developed:
-// https://www.khronos.org/registry/vulkan/specs/1.0-extensions/html/vkspec.html#VK_KHX_device_group
-// )
+// And a multi-GPU system could in theory have multiple GRAPHICS queues.
 class Instance {
  public:
   Instance();
@@ -430,24 +423,21 @@ class Instance {
   // ctorError is step 2 of the ctor (see class comments above).
   // Vulkan errors are returned from ctorError().
   //
-  // requiredExtensions is an array of strings naming any required
-  // extensions (e.g. glfwGetRequiredInstanceExtensions for glfw).
-  // [The SDL API is not as well defined yet but might be
-  // SDL_GetVulkanInstanceExtensions]
+  // Before calling ctorError, set requiredExtensions to the names of any
+  // required extensions (e.g. glfwGetRequiredInstanceExtensions for glfw, or
+  // SDL_Vulkan_GetInstanceExtensions for SDL).
   //
-  // createWindowSurface is a function that is called to initialize
-  // Instance::surface. It is called exactly once inside ctorError and
-  // not retained.
+  // createWindowSurface is a callback which gets called when Instance::surface
+  // must be created. It is called exactly once inside ctorError and not
+  // retained after.
   //
   // window is an opaque pointer used only in the call to
   // createWindowSurface.
-  WARN_UNUSED_RESULT int ctorError(const char** requiredExtensions,
-                                   size_t requiredExtensionCount,
-                                   CreateWindowSurfaceFn createWindowSurface,
+  WARN_UNUSED_RESULT int ctorError(CreateWindowSurfaceFn createWindowSurface,
                                    void* window);
 
   // open() is step 3 of the ctor. Call open() after modifying
-  // Device::extensionRequests, Device::surfaceFormats, or
+  // Device::requiredExtensions, Device::surfaceFormats, or
   // Device::presentModes.
   //
   // surfaceSizeRequest is the initial size of the window.
@@ -488,14 +478,28 @@ class Instance {
   std::set<SurfaceSupport> minSurfaceSupport{language::PRESENT,
                                              language::GRAPHICS};
 
-  // features enabled here will be *attempted* to be enabled on each device.
-  // Your app still must check Device::enabledFeatures for each device after
-  // calling Instance::open.
-  VkPhysicalDeviceFeatures features;
-
   // pAllocator defaults to nullptr. Your application can install a custom
   // allocator before calling ctorError().
   VkAllocationCallbacks* pAllocator = nullptr;
+
+  // enabledLayers should have all required instance layer names added before
+  // calling ctorError(); after it returns, check enabledLayers for what layers
+  // were successfully enabled.
+  std::set<std::string> enabledLayers;
+
+  // apiVersion is a convenience method to get applicationInfo.apiVersion.
+  uint32_t apiVersion() const { return applicationInfo.apiVersion; }
+
+  // apiVersionInUse reports the lowest apiVersion from instance and all devs.
+  uint32_t apiVersionInUse() const { return detectedApiVersionInUse; }
+
+  // minApiVersion can be set to VK_MAKE_VERSION(1, 1, 0) or something higher
+  // which will exclude any devices with physProp.apiVersion lower than that.
+  // The value 0 will use the autodetected apiVersion.
+  uint32_t minApiVersion{0};
+
+  // requiredExtensions should be filled by your app before calling ctorError.
+  std::vector<std::string> requiredExtensions;
 
  protected:
   // Override initDebug() if your app needs different debug settings.
@@ -514,8 +518,9 @@ class Instance {
   //
   // initSupportedQueues() prepares Device dev: extensions, surface format, and
   // present mode.
-  WARN_UNUSED_RESULT virtual VkResult initSupportedQueues(
-      Device& dev, std::vector<VkQueueFamilyProperties>& vkQFams);
+  WARN_UNUSED_RESULT virtual VkResult initSupportedQueues(Device& dev);
+
+  uint32_t detectedApiVersionInUse{0};
 };
 
 }  // namespace language

@@ -125,6 +125,14 @@ static inline const char* string_Decoration(spv::Decoration d) {
       return "InputAttachmentIndex";
     case spv::DecorationAlignment:
       return "Alignment";
+    case spv::DecorationMaxByteOffset:
+      return "MaxByteOffset";
+    case spv::DecorationAlignmentId:
+      return "AlignmentId";
+    case spv::DecorationMaxByteOffsetId:
+      return "MaxByteOffsetId";
+    case spv::DecorationExplicitInterpAMD:
+      return "ExplicitInterpAMD";
     case spv::DecorationOverrideCoverageNV:
       return "OverrideCoverageNV";
     case spv::DecorationPassthroughNV:
@@ -133,6 +141,10 @@ static inline const char* string_Decoration(spv::Decoration d) {
       return "ViewportRelativeNV";
     case spv::DecorationSecondaryViewportRelativeNV:
       return "SecondaryViewportRelativeNV";
+    case spv::DecorationHlslCounterBufferGOOGLE:
+      return "HlslCounterBufferGOOGLE";
+    case spv::DecorationHlslSemanticGOOGLE:
+      return "HlslSemanticGOOGLE";
     case spv::DecorationMax:
       break;
   }
@@ -159,6 +171,8 @@ static inline const char* string_BaseType(spirv_cross::SPIRType::BaseType t) {
       return "UInt64";
     case spirv_cross::SPIRType::AtomicCounter:
       return "AtomicCounter";
+    case spirv_cross::SPIRType::Half:
+      return "Half";
     case spirv_cross::SPIRType::Float:
       return "Float";
     case spirv_cross::SPIRType::Double:

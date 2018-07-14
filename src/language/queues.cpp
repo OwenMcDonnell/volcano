@@ -49,9 +49,8 @@ int Instance::open(VkExtent2D surfaceSizeRequest) {
     it->second.push_back(req);
   }
 
-  // For each device that has one or more queues requested, call
-  // vkCreateDevice() i.e. dispatch each queue request's dev_index to
-  // vkCreateDevice()
+  // For each device that has one or more queues requested, call vkCreateDevice
+  // i.e. dispatch each queue request's dev_index to vkCreateDevice now.
   for (const auto& kv : requested_devs) {
     auto& dev = *devs.at(kv.first);
     std::vector<VkDeviceQueueCreateInfo> allQci;
@@ -71,12 +70,10 @@ int Instance::open(VkExtent2D surfaceSizeRequest) {
 
       if (qfam.prios.size() < 1) {
         continue;  // This qfam is not being requested on this dev.
-      } else if (qfam.prios.size() > qfam.vk.queueCount) {
-        fprintf(
-            stderr,
-            "Cannot request %zu of dev_i=%zu, qFam[%zu] (max %zu allowed)\n",
-            qfam.prios.size(), (size_t)kv.first, q_i,
-            (size_t)qfam.vk.queueCount);
+      } else if (qfam.prios.size() > qfam.queueFamilyProperties.queueCount) {
+        logE("Cannot request %zu of dev_i=%zu, qFam[%zu] (max %zu allowed)\n",
+             qfam.prios.size(), (size_t)kv.first, q_i,
+             (size_t)qfam.queueFamilyProperties.queueCount);
         return 1;
       }
 
@@ -87,24 +84,40 @@ int Instance::open(VkExtent2D surfaceSizeRequest) {
       allQci.push_back(dqci);
     }
 
-    // Enable device layer "VK_LAYER_LUNARG_standard_validation"
-    std::vector<const char*> enabledLayers;
-    enabledLayers.push_back(VK_LAYER_LUNARG_standard_validation);
+    // Check dev.enableFeatures against dev.availableFeatures.
+    for (const auto kv : dev.enabledFeatures.reflect) {
+      const auto& name = kv.first.c_str();
+      VkBool32 enabled, avail;
+      if (dev.enabledFeatures.get(name, enabled) ||
+          dev.availableFeatures.get(name, avail)) {
+        return 1;
+      }
+      if (enabled && !avail && dev.enabledFeatures.set(name, VK_FALSE)) {
+        logE("enabledFeatures.set(%s, false) failed\n", name);
+        return 1;
+      }
+    }
 
     VkDeviceCreateInfo VkInit(dCreateInfo);
     dCreateInfo.queueCreateInfoCount = allQci.size();
     dCreateInfo.pQueueCreateInfos = allQci.data();
-    dCreateInfo.pEnabledFeatures = &dev.enabledFeatures;
-    if (dev.extensionRequests.size()) {
-      dCreateInfo.enabledExtensionCount = dev.extensionRequests.size();
-      dCreateInfo.ppEnabledExtensionNames = dev.extensionRequests.data();
+    if (apiVersionInUse() < VK_MAKE_VERSION(1, 1, 0)) {
+      dCreateInfo.pEnabledFeatures = &dev.enabledFeatures.features;
+    } else {
+      dCreateInfo.pEnabledFeatures = NULL;
+      dCreateInfo.pNext = &dev.enabledFeatures;
     }
-    dCreateInfo.enabledLayerCount = enabledLayers.size();
-    dCreateInfo.ppEnabledLayerNames = enabledLayers.data();
+    if (dev.requiredExtensions.size()) {
+      dCreateInfo.enabledExtensionCount = dev.requiredExtensions.size();
+      dCreateInfo.ppEnabledExtensionNames = dev.requiredExtensions.data();
+    }
+    // As of Vulkan 1.0.33, device-only layers are now deprecated.
+    dCreateInfo.enabledLayerCount = 0;
+    dCreateInfo.ppEnabledLayerNames = 0;
 
     VkResult v = vkCreateDevice(dev.phys, &dCreateInfo, pAllocator, &dev.dev);
     if (v != VK_SUCCESS) {
-      logE("dev_i=%zu %s failed: %d (%s)\n", (size_t)kv.first, "VkCreateDevice",
+      logE("dev_i=%zu %s failed: %d (%s)\n", (size_t)kv.first, "vkCreateDevice",
            v, string_VkResult(v));
       return 1;
     }
@@ -118,10 +131,6 @@ int Instance::open(VkExtent2D surfaceSizeRequest) {
     size_t q_count = 0;
     for (size_t q_i = 0; q_i < dev.qfams.size(); q_i++) {
       auto& qfam = dev.qfams.at(q_i);
-      if (dbg_lvl && qfam.prios.size()) {
-        logD("dev_i=%u q_count=%zu adding qfam[%zu] x %zu\n", kv.first, q_count,
-             q_i, qfam.prios.size());
-      }
       // Copy the newly minted VkQueue objects into dev.qfam.queues.
       for (size_t i = 0; i < qfam.prios.size(); i++) {
         qfam.queues.emplace_back();

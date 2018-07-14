@@ -31,7 +31,7 @@ ImageView::ImageView(Device& dev) : vk{dev.dev, vkDestroyImageView} {
 int ImageView::ctorError(Device& dev, VkImage image, VkFormat format) {
   info.image = image;
   info.format = format;
-  vk.reset();
+  vk.reset(dev.dev);
   VkResult v = vkCreateImageView(dev.dev, &info, dev.dev.allocator, &vk);
   if (v != VK_SUCCESS) {
     logE("%s failed: %d (%s)\n", "vkCreateImageView", v, string_VkResult(v));
@@ -63,7 +63,7 @@ int Framebuf::ctorError(Device& dev, VkRenderPass renderPass) {
   fbci.height = dev.swapChainInfo.imageExtent.height;
   fbci.layers = attachments.at(0).info.subresourceRange.layerCount;
 
-  vk.reset();
+  vk.reset(dev.dev);
   VkResult v = vkCreateFramebuffer(dev.dev, &fbci, dev.dev.allocator, &vk);
   if (v != VK_SUCCESS) {
     logE("%s failed: %d (%s)\n", "vkCreateFramebuffer", v, string_VkResult(v));

@@ -33,7 +33,12 @@ compiler:
 - gcc
 #- clang # disabled until https://reviews.llvm.org/D32761 lands in Travis CI
 script: export BOOTSTRAP_ON_TRAVIS_J=3 &&
-  ./build.cmd
+  ./build.cmd &&
+  vendor/subgn/gn gen out/Release "--args=is_debug = false is_official_build = true" &&
+  cat out/Debug/args.gn >> out/Release/args.gn &&
+  echo skip due to insufficient memory on travis-ci vendor/subgn/ninja -C out/Release &&
+  echo "use_vulkanmemoryallocator = false" >> out/Debug/args.gn &&
+  vendor/subgn/ninja -C out/Debug
 notifications:
   email:
     on_success: never

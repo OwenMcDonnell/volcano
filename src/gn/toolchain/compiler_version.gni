@@ -49,23 +49,25 @@ if (gcc_version == 0 && !is_clang && !is_win) {
                             "trim value")
 }
 
-if (clang_version == 0 && is_clang && !is_win) {
-  if (is_android) {
-    # sync with //src/gn/toolchain/android/BUILD.gn
-    import("//src/gn/toolchain/clang.gni")
-    _exe = "$clang_base_path/bin/clang"
-  } else if (is_posix) {
-    import("//src/gn/toolchain/posix/settings.gni")
-    _exe = clang_cc
+if (clang_version == 0 && is_clang) {
+  if (is_win) {
+    clang_version = win_clang_version
   } else {
-    assert(false, "GCC isn't supported on this platform")
+    if (is_android) {
+      # sync with //src/gn/toolchain/android/BUILD.gn
+      import("//src/gn/toolchain/android/settings.gni")
+      _exe = "$android_clang_toolchain_root/bin/clang"
+    } else if (is_posix) {
+      import("//src/gn/toolchain/posix/settings.gni")
+      _exe = clang_cc
+    } else {
+      assert(false, "GCC isn't supported on this platform")
+    }
+    clang_version = exec_script("posix/toolchain.py",
+                                [
+                                  "get_clang_version",
+                                  _exe,
+                                ],
+                                "trim value")
   }
-  clang_version = exec_script("posix/toolchain.py",
-                              [
-                                "get_clang_version",
-                                _exe,
-                              ],
-                              "trim value")
-} else if (clang_version == 0 && is_clang) {
-  clang_version = win_clang_version
 }

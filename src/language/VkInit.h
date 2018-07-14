@@ -46,6 +46,21 @@ inline void _VkInit(VkPhysicalDeviceFeatures& df) {
   // VkPhysicalDeviceFeatures has no 'sType'.
 }
 
+inline void _VkInit(VkPhysicalDeviceFeatures2& df) {
+  memset(&df, 0, sizeof(df));
+  df.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+}
+
+inline void _VkInit(VkPhysicalDeviceProperties& pp) {
+  memset(&pp, 0, sizeof(pp));
+  // VkPhysicalDeviceProperties has no 'sType'.
+}
+
+inline void _VkInit(VkPhysicalDeviceProperties2& pp) {
+  memset(&pp, 0, sizeof(pp));
+  pp.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+}
+
 inline void _VkInit(VkSwapchainCreateInfoKHR& scci) {
   memset(&scci, 0, sizeof(scci));
   scci.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
@@ -223,6 +238,16 @@ inline void _VkInit(VkImageMemoryBarrier& imb) {
   imb.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
 }
 
+inline void _VkInit(VkImageSubresourceRange& srr) {
+  // VkImageSubresourceRange has no sType.
+  memset(&srr, 0, sizeof(srr));
+}
+
+inline void _VkInit(VkImageSubresourceLayers& srl) {
+  // VkImageSubresourceLayers has no sType.
+  memset(&srl, 0, sizeof(srl));
+}
+
 inline void _VkInit(VkSamplerCreateInfo& sci) {
   memset(&sci, 0, sizeof(sci));
   sci.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
@@ -260,6 +285,231 @@ inline void _VkInit(VkMappedMemoryRange& mmr) {
 }
 
 inline void _VkInit(VkPushConstantRange& pcr) { memset(&pcr, 0, sizeof(pcr)); }
+
+inline void _VkInit(VkPhysicalDeviceVariablePointerFeatures& vpf) {
+  memset(&vpf, 0, sizeof(vpf));
+  vpf.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VARIABLE_POINTER_FEATURES;
+}
+
+inline void _VkInit(VkPhysicalDeviceMultiviewFeatures& mvf) {
+  memset(&mvf, 0, sizeof(mvf));
+  mvf.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MULTIVIEW_FEATURES;
+}
+
+inline void _VkInit(VkPhysicalDeviceProtectedMemoryFeatures& drm) {
+  memset(&drm, 0, sizeof(drm));
+  drm.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROTECTED_MEMORY_FEATURES;
+}
+
+inline void _VkInit(VkPhysicalDeviceShaderDrawParameterFeatures& sdp) {
+  memset(&sdp, 0, sizeof(sdp));
+  sdp.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_DRAW_PARAMETER_FEATURES;
+}
+
+inline void _VkInit(VkPhysicalDevice16BitStorageFeatures& s16) {
+  memset(&s16, 0, sizeof(s16));
+  s16.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_16BIT_STORAGE_FEATURES;
+}
+
+inline void _VkInit(VkPhysicalDeviceBlendOperationAdvancedFeaturesEXT& boa) {
+  memset(&boa, 0, sizeof(boa));
+  boa.sType =
+      VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BLEND_OPERATION_ADVANCED_FEATURES_EXT;
+}
+
+inline void _VkInit(VkPhysicalDeviceDescriptorIndexingFeaturesEXT& dif) {
+  memset(&dif, 0, sizeof(dif));
+  dif.sType =
+      VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES_EXT;
+}
+
+inline void _VkInit(VkPhysicalDeviceIDProperties& idp) {
+  memset(&idp, 0, sizeof(idp));
+  idp.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES;
+}
+
+inline void _VkInit(VkPhysicalDeviceMaintenance3Properties& m3p) {
+  memset(&m3p, 0, sizeof(m3p));
+  m3p.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_3_PROPERTIES;
+}
+
+inline void _VkInit(VkPhysicalDeviceMultiviewProperties& mv) {
+  memset(&mv, 0, sizeof(mv));
+  mv.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MULTIVIEW_PROPERTIES;
+}
+
+inline void _VkInit(VkPhysicalDevicePointClippingProperties& pc) {
+  memset(&pc, 0, sizeof(pc));
+  pc.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_POINT_CLIPPING_PROPERTIES;
+}
+
+inline void _VkInit(VkPhysicalDeviceProtectedMemoryProperties& drm) {
+  memset(&drm, 0, sizeof(drm));
+  drm.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROTECTED_MEMORY_PROPERTIES;
+}
+
+inline void _VkInit(VkPhysicalDeviceSubgroupProperties& sgp) {
+  memset(&sgp, 0, sizeof(sgp));
+  sgp.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_PROPERTIES;
+}
+
+inline void _VkInit(VkPhysicalDeviceBlendOperationAdvancedPropertiesEXT& bop) {
+  memset(&bop, 0, sizeof(bop));
+  bop.sType =
+      VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BLEND_OPERATION_ADVANCED_PROPERTIES_EXT;
+}
+
+inline void _VkInit(
+    VkPhysicalDeviceConservativeRasterizationPropertiesEXT& crp) {
+  memset(&crp, 0, sizeof(crp));
+  crp.sType =
+      VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_CONSERVATIVE_RASTERIZATION_PROPERTIES_EXT;
+}
+
+inline void _VkInit(VkPhysicalDeviceDescriptorIndexingPropertiesEXT& dip) {
+  memset(&dip, 0, sizeof(dip));
+  dip.sType =
+      VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_PROPERTIES_EXT;
+}
+
+inline void _VkInit(VkPhysicalDeviceDiscardRectanglePropertiesEXT& drp) {
+  memset(&drp, 0, sizeof(drp));
+  drp.sType =
+      VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DISCARD_RECTANGLE_PROPERTIES_EXT;
+}
+
+inline void _VkInit(VkPhysicalDeviceExternalMemoryHostPropertiesEXT& emh) {
+  memset(&emh, 0, sizeof(emh));
+  emh.sType =
+      VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_MEMORY_HOST_PROPERTIES_EXT;
+}
+
+inline void _VkInit(VkPhysicalDeviceSampleLocationsPropertiesEXT& slp) {
+  memset(&slp, 0, sizeof(slp));
+  slp.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SAMPLE_LOCATIONS_PROPERTIES_EXT;
+}
+
+inline void _VkInit(VkPhysicalDeviceSamplerFilterMinmaxPropertiesEXT& sfp) {
+  memset(&sfp, 0, sizeof(sfp));
+  sfp.sType =
+      VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SAMPLER_FILTER_MINMAX_PROPERTIES_EXT;
+}
+
+inline void _VkInit(VkPhysicalDeviceVertexAttributeDivisorPropertiesEXT& vad) {
+  memset(&vad, 0, sizeof(vad));
+  vad.sType =
+      VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VERTEX_ATTRIBUTE_DIVISOR_PROPERTIES_EXT;
+}
+
+inline void _VkInit(VkPhysicalDevicePushDescriptorPropertiesKHR& pdp) {
+  memset(&pdp, 0, sizeof(pdp));
+  pdp.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PUSH_DESCRIPTOR_PROPERTIES_KHR;
+}
+
+inline void _VkInit(
+    VkPhysicalDeviceMultiviewPerViewAttributesPropertiesNVX& nvp) {
+  memset(&nvp, 0, sizeof(nvp));
+  nvp.sType =
+      VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MULTIVIEW_PER_VIEW_ATTRIBUTES_PROPERTIES_NVX;
+}
+
+inline void _VkInit(VkPhysicalDeviceShaderCorePropertiesAMD& amd) {
+  memset(&amd, 0, sizeof(amd));
+  amd.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_CORE_PROPERTIES_AMD;
+}
+
+inline void _VkInit(VkFormatProperties2& fp) {
+  memset(&fp, 0, sizeof(fp));
+  fp.sType = VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_2;
+}
+
+inline void _VkInit(VkPhysicalDeviceMemoryProperties2& dmp) {
+  memset(&dmp, 0, sizeof(dmp));
+  dmp.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_PROPERTIES_2;
+}
+
+inline void _VkInit(VkImageFormatProperties2& ifp) {
+  memset(&ifp, 0, sizeof(ifp));
+  ifp.sType = VK_STRUCTURE_TYPE_IMAGE_FORMAT_PROPERTIES_2;
+}
+
+inline void _VkInit(VkExternalImageFormatProperties& efp) {
+  memset(&efp, 0, sizeof(efp));
+  efp.sType = VK_STRUCTURE_TYPE_EXTERNAL_IMAGE_FORMAT_PROPERTIES;
+}
+
+inline void _VkInit(VkSamplerYcbcrConversionImageFormatProperties& ycb) {
+  memset(&ycb, 0, sizeof(ycb));
+  ycb.sType =
+      VK_STRUCTURE_TYPE_SAMPLER_YCBCR_CONVERSION_IMAGE_FORMAT_PROPERTIES;
+}
+
+#if defined(VK_HEADER_VERSION) && VK_HEADER_VERSION > 75
+inline void _VkInit(VkAndroidHardwareBufferUsageANDROID& ahw) {
+  memset(&ahw, 0, sizeof(ahw));
+  ahw.sType = VK_STRUCTURE_TYPE_ANDROID_HARDWARE_BUFFER_USAGE_ANDROID;
+}
+#endif
+
+inline void _VkInit(VkTextureLODGatherFormatPropertiesAMD& lg) {
+  memset(&lg, 0, sizeof(lg));
+  lg.sType = VK_STRUCTURE_TYPE_TEXTURE_LOD_GATHER_FORMAT_PROPERTIES_AMD;
+}
+
+inline void _VkInit(VkPhysicalDeviceImageFormatInfo2& ifi) {
+  memset(&ifi, 0, sizeof(ifi));
+  ifi.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGE_FORMAT_INFO_2;
+}
+
+inline void _VkInit(VkPhysicalDeviceExternalImageFormatInfo& ei) {
+  memset(&ei, 0, sizeof(ei));
+  ei.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_IMAGE_FORMAT_INFO;
+}
+
+inline void _VkInit(VkQueueFamilyProperties2& qfp) {
+  memset(&qfp, 0, sizeof(qfp));
+  qfp.sType = VK_STRUCTURE_TYPE_QUEUE_FAMILY_PROPERTIES_2;
+}
+
+inline void _VkInit(VkDescriptorSetLayoutSupport& dsl) {
+  memset(&dsl, 0, sizeof(dsl));
+  dsl.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_SUPPORT;
+}
+
+inline void _VkInit(VkBindBufferMemoryInfo& bmi) {
+  memset(&bmi, 0, sizeof(bmi));
+  bmi.sType = VK_STRUCTURE_TYPE_BIND_BUFFER_MEMORY_INFO;
+}
+
+inline void _VkInit(VkBindImageMemoryInfo& imi) {
+  memset(&imi, 0, sizeof(imi));
+  imi.sType = VK_STRUCTURE_TYPE_BIND_IMAGE_MEMORY_INFO;
+}
+
+inline void _VkInit(VkMemoryRequirements2& mr2) {
+  memset(&mr2, 0, sizeof(mr2));
+  mr2.sType = VK_STRUCTURE_TYPE_MEMORY_REQUIREMENTS_2;
+}
+
+inline void _VkInit(VkMemoryDedicatedRequirements& ded) {
+  memset(&ded, 0, sizeof(ded));
+  ded.sType = VK_STRUCTURE_TYPE_MEMORY_DEDICATED_REQUIREMENTS;
+}
+
+inline void _VkInit(VkBufferMemoryRequirementsInfo2& mr2) {
+  memset(&mr2, 0, sizeof(mr2));
+  mr2.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_REQUIREMENTS_INFO_2;
+}
+
+inline void _VkInit(VkImageMemoryRequirementsInfo2& mr2) {
+  memset(&mr2, 0, sizeof(mr2));
+  mr2.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_REQUIREMENTS_INFO_2;
+}
+
+inline void _VkInit(VkImagePlaneMemoryRequirementsInfo& pri) {
+  memset(&pri, 0, sizeof(pri));
+  pri.sType = VK_STRUCTURE_TYPE_IMAGE_PLANE_MEMORY_REQUIREMENTS_INFO;
+}
 
 }  // namespace internal
 }  // namespace language

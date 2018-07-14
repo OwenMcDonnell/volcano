@@ -7,14 +7,21 @@
 
 #include <src/memory/memory.h>
 
+// skiaglue reads or writes images using skia.
 typedef struct skiaglue {
-  skiaglue(command::CommandPool& cpool, VkImageCreateInfo& info)
-      : info(info), cpool(cpool) {}
+  skiaglue(command::CommandPool& cpool) : cpool(cpool){};
+
+  // cpool is the CommandPool for read/write/transition and the Device dev
+  // inside it for allocating a Buffer and Image.
+  command::CommandPool& cpool;
 
   // loadImage loads imgFilename as a VK_FORMAT_R8G8B8A8_UNORM
-  // image in stage (a Buffer). copy1 is set up for a later copy from stage to
-  // an Image of your choosing. info is set up to create your Image.
-  int loadImage(const char* imgFilename, memory::Buffer& stage);
+  // image in stage (a Buffer). Then copies is set up for a later copy from
+  // 'stage' to 'img'. img.info is populated by loadImage so that img is ready
+  // for an img.ctorError call, though many fields are not touched (so your app
+  // can set things up before loadImage if desired.)
+  int loadImage(const char* imgFilename, memory::Buffer& stage,
+                memory::Image& img);
 
   // writePNG does not use imgFilenameFound, copy1, or info. It just writes
   // a PNG-encoded image at the requested outFilename.
@@ -26,10 +33,6 @@ typedef struct skiaglue {
 
   // imgFilenameFound is populated by loadImage().
   std::string imgFilenameFound;
-  // copy1 is populated by loadImage().
+  // copies is populated by loadImage().
   std::vector<VkBufferImageCopy> copies;
-  // info is populated by loadImage().
-  VkImageCreateInfo& info;
-  // cpool is the CommandPool which holds Buffer stage and can transition it.
-  command::CommandPool& cpool;
 } skiaglue;

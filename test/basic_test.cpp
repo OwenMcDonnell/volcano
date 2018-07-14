@@ -1,4 +1,4 @@
-/* Copyright (c) 2017 the Volcano Authors. Licensed under the GPLv3.
+/* Copyright (c) 2017-2018 the Volcano Authors. Licensed under the GPLv3.
  */
 #define GLFW_INCLUDE_VULKAN
 #ifdef _WIN32
@@ -33,22 +33,21 @@ namespace test {
 
 // TODO: change vsync on the fly (and it must work the same at init time)
 // TODO: switch VK_PRESENT_MODE_MAILBOX_KHR on the fly
-// Use a utility class *outside* lib/language to:
-//   TODO: show how to do double buffering, triple buffering
-//   TODO: permit customization of the enabled instance layers.
+// TODO: switch single, double, or triple buffering
 
 const char* imgFilename = nullptr;
+bool automatedTest = false;
 
 const std::vector<test::st_basic_test_vert> vertices = {
-    {{-0.5f, -0.5f, 0.0f}, {1.0f, 0.0f, 0.0f}, {1.0f, 0.0f}},
-    {{0.5f, -0.5f, 0.0f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f}},
-    {{0.5f, 0.5f, 0.0f}, {0.0f, 0.0f, 1.0f}, {0.0f, 1.0f}},
-    {{-0.5f, 0.5f, 0.0f}, {1.0f, 1.0f, 1.0f}, {1.0f, 1.0f}},
-
     {{-0.5f, -0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}, {1.0f, 0.0f}},
     {{0.5f, -0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f}},
     {{0.5f, 0.5f, -0.5f}, {0.0f, 0.0f, 1.0f}, {0.0f, 1.0f}},
-    {{-0.5f, 0.5f, -0.5f}, {1.0f, 1.0f, 1.0f}, {1.0f, 1.0f}}};
+    {{-0.5f, 0.5f, -0.5f}, {1.0f, 1.0f, 1.0f}, {1.0f, 1.0f}},
+
+    {{-0.5f, -0.5f, 0.0f}, {1.0f, 0.0f, 0.0f}, {1.0f, 0.0f}},
+    {{0.5f, -0.5f, 0.0f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f}},
+    {{0.5f, 0.5f, 0.0f}, {0.0f, 0.0f, 1.0f}, {0.0f, 1.0f}},
+    {{-0.5f, 0.5f, 0.0f}, {1.0f, 1.0f, 1.0f}, {1.0f, 1.0f}}};
 
 const std::vector<uint16_t> indices = {
     0, 1, 2, 2, 3, 0, 4, 5, 6, 6, 7, 4,
@@ -92,6 +91,7 @@ class SimplePipeline : public science::CommandPoolContainer {
 
   std::chrono::time_point<std::chrono::high_resolution_clock> startTime;
   unsigned frameCount = 0;
+  unsigned lastDisplayedFrameCount = 0;
   int timeDelta = 0;
 
   int updateUniformBuffer() {
@@ -100,11 +100,10 @@ class SimplePipeline : public science::CommandPoolContainer {
                      currentTime - startTime)
                      .count() /
                  1000.0f;
-    frameCount++;
     if (time > 1.0) {
-      logI("%d fps\n", frameCount);
+      logI("%d fps\n", frameCount - lastDisplayedFrameCount);
       startTime = currentTime;
-      frameCount = 0;
+      lastDisplayedFrameCount = frameCount;
       timeDelta++;
       timeDelta &= 3;
     }
@@ -160,10 +159,9 @@ class SimplePipeline : public science::CommandPoolContainer {
           sizeof(vertices[0]) * vertices.size();
       vertexBuffer.info.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
 
-      if (stagingBuffer.ctorHostCoherent(dev) ||
-          stagingBuffer.bindMemory(dev) ||
-          stagingBuffer.copyFromHost(dev, vertices) ||
-          vertexBuffer.ctorDeviceLocal(dev) || vertexBuffer.bindMemory(dev) ||
+      if (stagingBuffer.ctorHostCoherent() || stagingBuffer.bindMemory() ||
+          stagingBuffer.copyFromHost(vertices) ||
+          vertexBuffer.ctorDeviceLocal() || vertexBuffer.bindMemory() ||
           vertexBuffer.copy(cpool, stagingBuffer)) {
         return 1;
       }
@@ -174,31 +172,38 @@ class SimplePipeline : public science::CommandPoolContainer {
           sizeof(indices[0]) * indices.size();
       indexBuffer.info.usage = VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
 
-      if (stagingBuffer.ctorHostCoherent(dev) ||
-          stagingBuffer.bindMemory(dev) ||
-          stagingBuffer.copyFromHost(dev, indices) ||
-          indexBuffer.ctorDeviceLocal(dev) || indexBuffer.bindMemory(dev) ||
+      if (stagingBuffer.ctorHostCoherent() || stagingBuffer.bindMemory() ||
+          stagingBuffer.copyFromHost(indices) ||
+          indexBuffer.ctorDeviceLocal() || indexBuffer.bindMemory() ||
           indexBuffer.copy(cpool, stagingBuffer)) {
         return 1;
       }
     }
 
-    if (uniform.ctorError(dev, sizeof(test::UniformBufferObject))) {
+    if (uniform.ctorError(sizeof(test::UniformBufferObject))) {
       return 1;
     }
 
     memory::Buffer stage(cpool.dev);
-    skiaglue skGlue(cpool, textureSampler.image.info);
+    skiaglue skGlue(cpool);
     textureSampler.info.magFilter = VK_FILTER_LINEAR;
     textureSampler.info.minFilter = VK_FILTER_LINEAR;
     textureSampler.info.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
-    if (skGlue.loadImage(imgFilename, stage) ||
-        textureSampler.ctorError(cpool, stage, skGlue.copies)) {
+    if (skGlue.loadImage(imgFilename, stage, textureSampler.image)) {
+      logE("failed to load \"%s\"\n", imgFilename);
+      return 1;
+    }
+    if (textureSampler.ctorError(cpool, stage, skGlue.copies)) {
       return 1;
     }
 
-    pipe0.info().dynamicStates.emplace_back(VK_DYNAMIC_STATE_VIEWPORT);
-    pipe0.info().dynamicStates.emplace_back(VK_DYNAMIC_STATE_SCISSOR);
+    {
+      auto& pipeInfo = pipe0.info();
+      pipeInfo.perFramebufColorBlend.at(0) =
+          command::PipelineCreateInfo::withEnabledAlpha();
+      pipeInfo.dynamicStates.emplace_back(VK_DYNAMIC_STATE_VIEWPORT);
+      pipeInfo.dynamicStates.emplace_back(VK_DYNAMIC_STATE_SCISSOR);
+    }
     if (pipe0.addDepthImage({
             VK_FORMAT_D32_SFLOAT,
             VK_FORMAT_D32_SFLOAT_S8_UINT,
@@ -295,12 +300,16 @@ int mainLoop(GLFWwindow* window, SimplePipeline& simple) {
 
   while (!glfwWindowShouldClose(window)) {
     glfwPollEvents();
+    if (automatedTest && simple.timeDelta == 3) {
+      break;
+    }
     if (simple.updateUniformBuffer()) {
       return 1;
     }
 
     uint32_t next_image_i;
-    if (simple.acquireNextImage(&next_image_i, imageAvailableSemaphore)) {
+    if (simple.acquireNextImage(simple.frameCount, &next_image_i,
+                                imageAvailableSemaphore)) {
       return 1;
     }
     if (next_image_i != (uint32_t)-1) {
@@ -314,6 +323,7 @@ int mainLoop(GLFWwindow* window, SimplePipeline& simple) {
       if (next_image_i != (uint32_t)-1 && renderSemaphore.waitIdle()) {
         return 1;
       }
+      simple.frameCount++;
     }
   }
 
@@ -335,7 +345,10 @@ int runLanguage(GLFWwindow* window, VkExtent2D size) {
   unsigned int extensionSize = 0;
   const char** extensions = glfwGetRequiredInstanceExtensions(&extensionSize);
   language::Instance inst;
-  if (inst.ctorError(extensions, extensionSize, createWindowSurface, window)) {
+  for (unsigned int i = 0; i < extensionSize; i++) {
+    inst.requiredExtensions.push_back(extensions[i]);
+  }
+  if (inst.ctorError(createWindowSurface, window)) {
     return 1;
   }
   logI("Instance::open\n");
@@ -356,7 +369,15 @@ void printGLFWerr(int code, const char* msg) {
 }
 
 int runGLFW() {
-  glfwInit();
+  if (!strcmp(imgFilename, "--auto")) {
+    // Enable automated testing
+    imgFilename = "vendor/gli/doc/logo.png";
+    automatedTest = true;
+  }
+  if (!glfwInit()) {
+    logE("glfwInit failed. Windowing system probably disabled.\n");
+    return 1;
+  }
   glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
   VkExtent2D size{800, 600};
   GLFWwindow* window = glfwCreateWindow(
@@ -386,7 +407,7 @@ void android_main(android_app* app) {
 #else
 int main(int argc, char** argv) {
   if (argc != 2) {
-    fprintf(stderr, "usage: %s filename\n", argv[0]);
+    fprintf(stderr, "usage: %s [ filename | --auto ]\n", argv[0]);
     return 1;
   }
   imgFilename = argv[1];

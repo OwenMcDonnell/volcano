@@ -368,12 +368,18 @@ typedef struct Event {
 
 // CommandPool holds a reference to the VkCommandPool from which commands are
 // allocated. Create a CommandPool instance in each thread that submits
-// commands to qfam_i.
+// commands to CommandPool::queueFamily.
+//
+// A VkCommandPool must be "externally synchronized," and so the optimal usage
+// of a VkCommandPool is to create one per CPU. Examine CommandPool::lockmutex
+// to find all synchronization requirements.
 class CommandPool {
  protected:
-  language::QueueFamily* qf_ = nullptr;
+  language::QueueFamilyProperties* qf_ = nullptr;
+  std::recursive_mutex lockmutex;
   VkCommandBuffer toBorrow{VK_NULL_HANDLE};
   int borrowCount{0};
+  friend class CommandBuffer;
 
  public:
   CommandPool(language::Device& dev)
@@ -382,6 +388,18 @@ class CommandPool {
   }
   CommandPool(CommandPool&&) = default;
   CommandPool(const CommandPool&) = delete;
+  virtual ~CommandPool();
+
+  // lock_guard_t: like c++17's constructor type inference, but we are in c++11
+  // Instead of: std::lock_guard<std::recursive_mutex> lock(cpool.lockmutex);
+  // Do this:    CommandPool::lock_guard_t             lock(cpool.lockmutex);
+  // (Then uses of lock_guard_t do not assume lockmutex is a recursive_mutex.)
+  typedef std::lock_guard<std::recursive_mutex> lock_guard_t;
+  // unique_lock_t: like c++17's constructor type inference, but in c++11
+  // Instead of: std::unique_lock<std::recursive_mutex> lock(cpool.lockmutex);
+  // Do this:    CommandPool::unique_lock_t             lock(cpool.lockmutex);
+  // (Then uses of unique_lock_t do not assume lockmutex is a recursive_mutex.)
+  typedef std::unique_lock<std::recursive_mutex> unique_lock_t;
 
   // Two-stage constructor: set queueFamily, then call ctorError() to build
   // CommandPool. Typically a queueFamily of language::GRAPHICS is wanted.
@@ -403,6 +421,7 @@ class CommandPool {
   // when dynamically replacing an existing set of CommandBuffers.
   void free(std::vector<VkCommandBuffer>& buf) {
     if (!buf.size()) return;
+    lock_guard_t lock(lockmutex);
     vkFreeCommandBuffers(dev.dev, vk, buf.size(), buf.data());
   }
 
@@ -416,6 +435,7 @@ class CommandPool {
   WARN_UNUSED_RESULT int reset(
       VkCommandPoolResetFlagBits flags =
           VK_COMMAND_POOL_RESET_RELEASE_RESOURCES_BIT) {
+    lock_guard_t lock(lockmutex);
     VkResult v;
     if ((v = vkResetCommandPool(dev.dev, vk, flags)) != VK_SUCCESS) {
       logE("%s failed: %d (%s)\n", "vkResetCommandPool", v, string_VkResult(v));
@@ -427,6 +447,11 @@ class CommandPool {
   // borrowOneTimeBuffer by default only has one VkCommandBuffer to lend out.
   // If that is too restrictive, override this method. The default keeps things
   // simple, short, and sweet.
+  //
+  // Note that if your app never calls this function, no "one time buffer" is
+  // allocated in this CommandPool. After this is called, the "one time buffer"
+  // is held for the rest of the life of this CommandPool. An empty
+  // VkCommandBuffer uses very little space, though.
   virtual VkCommandBuffer borrowOneTimeBuffer();
 
   // unborrowOneTimeBuffer must be called before the next borrowOneTimeBuffer

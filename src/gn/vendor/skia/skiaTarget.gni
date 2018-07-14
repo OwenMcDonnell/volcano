@@ -23,7 +23,7 @@ if (is_win) {
 }
 
 declare_args() {
-  libskia_path = "$root_out_dir/skia/$libskia"
+  libskia_path = "$root_out_dir/$skiasubdir/$libskia"
   libskia_extra_args = ""
 }
 
@@ -63,7 +63,7 @@ if (android_variants_dir != "" && current_os != "android") {
   exec_script("//src/gn/vendor/subninja.py",
     [ # arguments
       "--addpath=" + rebase_path("../../../../vendor/subgn"),
-      "--chdir=skia",
+      "--chdir=$skiasubdir",
       "--exec=gn",
       "-q",
       "gen", ".",

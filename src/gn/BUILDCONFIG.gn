@@ -10,13 +10,7 @@ if (target_os == "") {
 }
 
 if (target_cpu == "") {
-  if (target_os == "android") {
-    # Android target_cpu must always be configured.
-    assert(target_cpu != "",
-        "target_cpu is set with: gn gen --args=target_cpu=arm64-v8a")
-  } else {
-    target_cpu = host_cpu
-  }
+  target_cpu = host_cpu
 }
 
 if (current_cpu == "") {
@@ -39,6 +33,10 @@ declare_args() {
   # This should not normally be set as a build argument.  It's here so that
   # every toolchain can pass through the "global" value via toolchain_args().
   host_toolchain = ""
+
+  # Android variants leave target_os to its default (target_os = host_os)
+  # But use androidExecutable.gni to build all variants in parallel.
+  android_variants_dir = ""
 }
 
 declare_args() {
@@ -68,7 +66,8 @@ if (host_toolchain == "") {
 
 _default_toolchain = ""
 
-if (target_os == "android") {
+if (target_os == "android" ||
+    (current_os == "android" && android_variants_dir != "")) {
   if (is_clang) {
     _default_toolchain = "//src/gn/toolchain/android:android_clang_$target_cpu"
   } else {

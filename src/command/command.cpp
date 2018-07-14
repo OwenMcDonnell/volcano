@@ -4,6 +4,10 @@
 
 namespace command {
 
+CommandPool::~CommandPool() {}
+
+CommandBuffer::~CommandBuffer() {}
+
 int CommandPool::ctorError(VkCommandPoolCreateFlags flags) {
   if (queueFamily == language::NONE) {
     logE("CommandPool::queueFamily must be set before calling ctorError\n");
@@ -35,6 +39,8 @@ int CommandPool::alloc(std::vector<VkCommandBuffer>& buf,
     logE("%s failed: buf.size is 0\n", "vkAllocateCommandBuffers");
     return 1;
   }
+
+  lock_guard_t lock(lockmutex);
   VkCommandBufferAllocateInfo VkInit(ai);
   ai.commandPool = vk;
   ai.level = level;
@@ -50,27 +56,46 @@ int CommandPool::alloc(std::vector<VkCommandBuffer>& buf,
 }
 
 VkCommandBuffer CommandPool::borrowOneTimeBuffer() {
-  if (!toBorrow) {
-    std::vector<VkCommandBuffer> v;
-    v.resize(1);
-    if (alloc(v)) {
-      logE("borrowOneTimeBuffer: alloc failed\n");
+  std::vector<VkCommandBuffer> v;
+  for (;;) {
+    if (v.size()) {
+      // Clear out v for a second attempt. (It's already empty the first time.)
+      free(v);
+      v.clear();
+    }
+    // Read toBorrow without a lock. Write-after-read safe because toBorrow
+    // has only transition in its lifetime, from NULL to populated, which is
+    // checked below after acquiring the lock.
+    if (!toBorrow) {
+      v.resize(1);
+      // Call alloc() without holding lock.
+      if (alloc(v)) {
+        logE("borrowOneTimeBuffer: alloc failed\n");
+        return VK_NULL_HANDLE;
+      }
+    }
+    // Now transfer v to toBorrow while holding lock.
+    lock_guard_t lock(lockmutex);
+    if (!toBorrow) {
+      toBorrow = v.at(0);
+      borrowCount = 0;
+    } else if (v.size()) {
+      // A race occured: toBorrow was updated. Release lock and try again.
+      continue;
+    }
+    if (borrowCount) {
+      logE("borrowOneTimeBuffer only has one VkCommandBuffer to lend out.\n");
+      logE("This keeps it simple, short, and sweet. Consider whether you\n");
+      logE("need two buffers during init, since it will hide bugs.\n");
       return VK_NULL_HANDLE;
     }
-    toBorrow = v.at(0);
-    borrowCount = 0;
+    borrowCount++;
+    return toBorrow;
   }
-  if (borrowCount) {
-    logE("borrowOneTimeBuffer only has one VkCommandBuffer to lend out.\n");
-    logE("This keeps things simple, short, and sweet. Consider whether you\n");
-    logE("need two buffers during init, since it will hide bugs.\n");
-    return VK_NULL_HANDLE;
-  }
-  borrowCount++;
-  return toBorrow;
 }
 
 int CommandPool::unborrowOneTimeBuffer(VkCommandBuffer buf) {
+  lock_guard_t lock(lockmutex);
   if (!toBorrow) {
     logE("unborrowOneTimeBuffer: borrowOneTimeBuffer was never called!\n");
     return 1;
@@ -88,8 +113,6 @@ int CommandPool::unborrowOneTimeBuffer(VkCommandBuffer buf) {
   borrowCount--;
   return 0;
 }
-
-CommandBuffer::~CommandBuffer() {}
 
 // trimSrcStage modifies access bits that are not supported by stage. It also
 // simplifies stage selection by tailoring the stage to the access bits'

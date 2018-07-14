@@ -20,146 +20,6 @@
 
 namespace science {
 
-// Forward-declare SubresUpdate for SubresUpdateBase.
-template <typename T>
-class SubresUpdate;
-
-// SubresUpdateBase contains some common code.
-// See SubresUpdate and specializations below.
-template <typename T>
-class SubresUpdateBase {
- public:
-  SubresUpdateBase(T& wrapped_) : wrapped(wrapped_) {}
-
-  // Specify that this Subres applied to a color attachment.
-  SubresUpdate<T>& addColor() {
-    wrapped.aspectMask |= VK_IMAGE_ASPECT_COLOR_BIT;
-    return *static_cast<SubresUpdate<T>*>(this);
-  }
-  // Specify that this Subres applied to a depth attachment.
-  SubresUpdate<T>& addDepth() {
-    wrapped.aspectMask |= VK_IMAGE_ASPECT_DEPTH_BIT;
-    return *static_cast<SubresUpdate<T>*>(this);
-  }
-  // Specify that this Subres applied to a stencil attachment.
-  SubresUpdate<T>& addStencil() {
-    wrapped.aspectMask |= VK_IMAGE_ASPECT_STENCIL_BIT;
-    return *static_cast<SubresUpdate<T>*>(this);
-  }
-
-  // Specify layer offset and count. Might be used for stereo displays.
-  SubresUpdate<T>& setLayer(uint32_t offset, uint32_t count) {
-    wrapped.baseArrayLayer = offset;
-    wrapped.layerCount = count;
-    return *static_cast<SubresUpdate<T>*>(this);
-  }
-
- protected:
-  T& wrapped;
-};
-
-// SubresUpdate is a builder pattern for populating a
-// VkImageSubresourceRange or a VkImageSubresourceLayers.
-//
-// Example usage:
-//    #include <vulkan/vk_format_utils.h>
-//    VkImageMemoryBarrier imageB;
-//    ... // set up imageB
-//    auto u = Subres(imageB.subresourceRange).addDepth();
-//    if (FormatHasStencil(info.format)) {
-//      u.addStencil();
-//    }
-//
-// SubresUpdate is like Subres except it does not zero out the wrapped type.
-// This is for code that will *Update* an existing object.
-template <typename T>
-class SubresUpdate : public SubresUpdateBase<T> {
-  // Template specialization requires separate definitions below.
-};
-
-// SubresUpdate<T> will automatically use this definition if T is a
-// VkImageSubresourceRange.
-template <>
-class SubresUpdate<VkImageSubresourceRange>
-    : public SubresUpdateBase<VkImageSubresourceRange> {
- public:
-  // Constructor takes a wrapped object. Object may be VkImageSubresourceRange
-  // or VkImageSubresourceLayers.
-  SubresUpdate(VkImageSubresourceRange& wrapped_)
-      : SubresUpdateBase(wrapped_) {}
-
-  // Specify mip-mapping offset and count.
-  // Only works for VkImageSubresourceRange! The compiler will fail with:
-  // error: 'class science::SubresUpdate<VkImageSubresourceLayers>' has no
-  // member named 'setMips' -- because VkImageSubresourceLayers is different.
-  SubresUpdate& setMips(uint32_t offset, uint32_t count) {
-    wrapped.baseMipLevel = offset;
-    wrapped.levelCount = count;
-    return *this;
-  }
-
-  // reset throws away all updates, resetting the values to defaults.
-  SubresUpdate& reset() {
-    memset(&wrapped, 0, sizeof(wrapped));
-    wrapped.levelCount = 1;  // Assume 1 mipmap (no mipmapping).
-    wrapped.layerCount = 1;  // Assume 1 layer (no stereo).
-    return *this;
-  }
-};
-
-// SubresUpdate<T> will automatically use this definition if T is a
-// VkImageSubresourceLayers.
-template <>
-class SubresUpdate<VkImageSubresourceLayers>
-    : public SubresUpdateBase<VkImageSubresourceLayers> {
- public:
-  // Constructor takes a wrapped object. Object may be VkImageSubresourceRange
-  // or VkImageSubresourceLayers.
-  SubresUpdate(VkImageSubresourceLayers& wrapped_)
-      : SubresUpdateBase(wrapped_) {}
-
-  // Specify mipmap layer.
-  // Only works for VkImageSubresourceLayers! The compiler will fail with:
-  // error: 'class science::SubresUpdate<VkImageSubresourceRange>' has no
-  // member named 'setMipLevel' -- because VkImageSubresourceRange is different.
-  SubresUpdate& setMipLevel(uint32_t level) {
-    wrapped.mipLevel = level;
-    return *this;
-  }
-
-  // reset throws away all updates, resetting the values to defaults.
-  SubresUpdate& reset() {
-    memset(&wrapped, 0, sizeof(wrapped));
-    wrapped.layerCount = 1;  // Assume 1 layer (no stereo).
-    return *this;
-  }
-};
-
-// Subres is a builder pattern for populating a
-// VkImageSubresourceRange or a VkImageSubresourceLayers.
-//
-// Construct it wrapped around an existing VkImageSubresourceRange or
-// VkImageSubresourceLayers. It will immediately zero out the wrapped type.
-// This is for code that starts from scratch instead of an *Update*.
-//
-// This is better done with ImageCopies, below, but to show a Subres example:
-//   VkImageCopy region = {};
-//   // Use Subres() to set up a struct from scratch.
-//   science::Subres(region.srcSubresource).addColor();
-//   science::Subres(region.dstSubresource).addColor();
-//   region.srcOffset = {0, 0, 0};
-//   region.dstOffset = {0, 0, 0};
-//   region.extent = ...;
-//
-//   command::SmartCommandBuffer buffer(cpool);
-//   if (buffer.ctorError() || buffer.autoSubmit() ||
-//       buffer.copyImage(srcImage.vk, dstImage.vk,
-//           std::vector<VkImageCopy>{region})) { ... handle error ... }
-template <typename T>
-inline SubresUpdate<T> Subres(T& wrapped_) {
-  return SubresUpdate<T>(wrapped_).reset();
-}
-
 // ImageCopies is a vector of VkImageCopy with convenient methods for quickly
 // creating each VkImageCopy.
 //
@@ -193,10 +53,11 @@ class ImageCopies : public std::vector<VkImageCopy> {
       : std::vector<VkImageCopy>(init, alloc) {}
 
   // Constructor for creating a straight 1:1 copy of src.
-  ImageCopies(memory::Image& src) { addSrc(src); }
+  ImageCopies(memory::Image& src, memory::Image& dst) { add(src, dst); }
 
-  void addSrc(memory::Image& src);
-  void addSrcAtMipLevel(memory::Image& src, uint32_t mipLevel);
+  void add(memory::Image& src, memory::Image& dst);
+  void addSingleMipLevel(memory::Image& src, uint32_t srcMipLevel,
+                         memory::Image& dst, uint32_t dstMipLevel);
 };
 
 // CommandPoolContainer implements onResized() and automatically handles
@@ -285,10 +146,13 @@ struct CommandPoolContainer {
   // next_image_i = (uint32_t) -1, signalling that the app must immediately
   // jump to the top of its main loop.
   //
+  // Pass in frameNumber for convenience; dev.setFrameNumber is called for you.
+  //
   // Note: Use PresentSemaphore::present() to handle all the same edge cases as
   //       they can arise from the result of vkQueuePresentKHR.
   WARN_UNUSED_RESULT int acquireNextImage(
-      uint32_t* next_image_i, command::Semaphore& imageAvailableSemaphore,
+      uint32_t frameNumber, uint32_t* next_image_i,
+      command::Semaphore& imageAvailableSemaphore,
       // A timeout of uint64_t::max means infinity.
       uint64_t timeout = std::numeric_limits<uint64_t>::max(),
       // An optional fence can signal the CPU when
@@ -336,8 +200,8 @@ class PresentSemaphore : public command::Semaphore {
   language::SurfaceSupport queueFamily{language::PRESENT};
 };
 
-// SmartCommandBuffer builds on top of CommandBuffer with convenience methods
-// such as: AutoSubmit()
+// SmartCommandBuffer builds on top of CommandBuffer with convenience method
+// AutoSubmit()
 typedef struct SmartCommandBuffer : public command::CommandBuffer {
   SmartCommandBuffer(command::CommandPool& cpool_, size_t poolQindex_)
       : CommandBuffer{cpool_}, poolQindex{poolQindex_} {}
@@ -370,56 +234,6 @@ typedef struct SmartCommandBuffer : public command::CommandBuffer {
       return 1;
     }
     ctorErrorSuccess = true;
-    return 0;
-  }
-
-  WARN_UNUSED_RESULT int blitImage(memory::Image& src, memory::Image& dst,
-                                   const std::vector<VkImageBlit>& regions,
-                                   VkFilter filter = VK_FILTER_LINEAR) {
-    return CommandBuffer::blitImage(src.vk, src.currentLayout, dst.vk,
-                                    dst.currentLayout, regions, filter);
-  }
-
-  WARN_UNUSED_RESULT int copyImage(memory::Image& src, memory::Image& dst,
-                                   const std::vector<VkImageCopy>& regions) {
-    return CommandBuffer::copyImage(src.vk, src.currentLayout, dst.vk,
-                                    dst.currentLayout, regions);
-  }
-
-  WARN_UNUSED_RESULT int copyImage(
-      memory::Buffer& src, memory::Image& dst,
-      const std::vector<VkBufferImageCopy>& regions) {
-    return copyBufferToImage(src.vk, dst.vk, dst.currentLayout, regions);
-  }
-
-  WARN_UNUSED_RESULT int copyImage(
-      memory::Image& src, memory::Buffer& dst,
-      const std::vector<VkBufferImageCopy>& regions) {
-    return copyImageToBuffer(src.vk, src.currentLayout, dst.vk, regions);
-  }
-
-  // transition is a convenience wrapper around CommandBuffer::barrier().
-  // NOTE: combining all barriers into a one BarrierSet is more efficient,
-  // but it is shorter if you can just write buffer.transition().
-  WARN_UNUSED_RESULT int transition(memory::Image& i, VkImageLayout newLayout) {
-    if (i.currentLayout == newLayout) {
-      // Silently discard no-op transitions.
-      return 0;
-    }
-    command::CommandBuffer::BarrierSet bset;
-    bset.img.push_back(i.makeTransition(newLayout));
-    SubresUpdate<VkImageSubresourceRange>(bset.img.back().subresourceRange)
-        .setMips(0, i.info.mipLevels);
-    if (barrier(bset)) {
-      char msg[256];
-      snprintf(msg, sizeof(msg),
-               ":transition(from %s to %s): makeTransition or barrier",
-               string_VkImageLayout(i.currentLayout),
-               string_VkImageLayout(newLayout));
-      logE("SmartCommandBuffer:%s failed\n", msg);
-      return 1;
-    }
-    i.currentLayout = newLayout;
     return 0;
   }
 

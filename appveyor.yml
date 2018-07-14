@@ -1,0 +1,8 @@
+version: 1.0.{build}
+image: Visual Studio 2017
+test: off
+build_script:
+- cmd: >-
+    call "C:\Program Files (x86)\Microsoft Visual Studio\2017\Community\VC\Auxiliary\Build\vcvars64.bat"
+
+    build.cmd

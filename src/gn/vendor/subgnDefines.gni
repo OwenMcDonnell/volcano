@@ -3,4 +3,5 @@
 declare_args() {
   subgn_path = "../../vendor/subgn"
   volcano_prefix = "//vendor/volcano/"
+  skiasubdir = "skia$current_cpu"
 }

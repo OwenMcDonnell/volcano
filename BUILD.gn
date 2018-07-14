@@ -3,11 +3,15 @@
 declare_args() {
   is_skia_standalone = true
   use_spirv_cross_reflection = true
+  use_vulkanmemoryallocator = true
 }
 
 config("language_config") {
   if (!is_win) {
     cflags = [ "-Wno-missing-field-initializers" ]
+  }
+  if (!use_vulkanmemoryallocator) {
+    defines = [ "VOLCANO_DISABLE_VULKANMEMORYALLOCATOR" ]
   }
 }
 
@@ -24,6 +28,7 @@ static_library("language") {
     "src/language/log.cpp",
     "src/language/language.cpp",
     "src/language/queues.cpp",
+    "src/language/reflectionmap.cpp",
     "src/language/requestqfams.cpp",
     "src/language/supported_queues.cpp",
     "src/language/swapchain.cpp",
@@ -72,12 +77,14 @@ source_set("memory") {
     "src/memory/memory.cpp",
     "src/memory/layout.cpp",
     "src/memory/sampler.cpp",
+    "src/memory/transition.cpp",
   ]
 
   deps = [
     ":command",
     ":language",
     "//src/gn/vendor/vulkansamples:vk_format_utils",
+    "//src/gn/vendor/vulkanmemoryallocator",
   ]
   public_deps = [ "//src/gn/vendor/vulkansamples" ]
 
@@ -129,7 +136,7 @@ group("default") {
   if (!is_android && android_variants_dir == "") {
     testonly = true
     deps = [
-      "test:basic_test",
+      "test",
     ]
   }
 }

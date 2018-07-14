@@ -2,6 +2,7 @@
  */
 #include "VkEnum.h"
 #include "language.h"
+#include "vk_enum_string_helper.h"
 
 namespace language {
 using namespace VkEnum;
@@ -53,15 +54,38 @@ int InstanceExtensionChooser::choose() {
   return r;
 }
 
+InstanceExtensionChooser::InstanceExtensionChooser(Instance& inst) {
+  if (inst.requiredExtensions.size() == 0 &&
+      inst.minSurfaceSupport.find(language::PRESENT) !=
+          inst.minSurfaceSupport.end()) {
+    // Do not immediately abort. Maybe you know what you're doing and
+    // this error message is out of date? If so, please submit a bug.
+    logW("Instance::ctorError: did you forget to set requiredExtensions?\n");
+    logW("creating a surface will fail due to missing extension.\n");
+  }
+
+  required = inst.requiredExtensions;
+}
+
 InstanceExtensionChooser::~InstanceExtensionChooser(){};
 
 VkFormat Device::chooseFormat(VkImageTiling tiling, VkFormatFeatureFlags flags,
                               const std::vector<VkFormat>& fmts) {
+  apiUsage(1, 1, 0,
+           flags & (VK_FORMAT_FEATURE_TRANSFER_SRC_BIT |
+                    VK_FORMAT_FEATURE_TRANSFER_DST_BIT),
+           "chooseFormat(flags=%x) %s", flags,
+           "uses VK_FORMAT_FEATURE_TRANSFER_{SRC or DST}_BIT");
   switch (tiling) {
     case VK_IMAGE_TILING_LINEAR:
       for (auto format : fmts) {
-        VkFormatProperties props = formatProperties(format);
-        if ((props.linearTilingFeatures & flags) == flags) {
+        FormatProperties props(format);
+        if (props.getProperties(*this)) {
+          logE("Device::chooseFormat(%s, %x):%s", string_VkImageTiling(tiling),
+               flags, "FormatProperties.getProperties failed\n");
+          return VK_FORMAT_UNDEFINED;
+        }
+        if ((props.formatProperties.linearTilingFeatures & flags) == flags) {
           return format;
         }
       }
@@ -69,8 +93,13 @@ VkFormat Device::chooseFormat(VkImageTiling tiling, VkFormatFeatureFlags flags,
 
     case VK_IMAGE_TILING_OPTIMAL:
       for (auto format : fmts) {
-        VkFormatProperties props = formatProperties(format);
-        if ((props.optimalTilingFeatures & flags) == flags) {
+        FormatProperties props(format);
+        if (props.getProperties(*this)) {
+          logE("Device::chooseFormat(%s, %x):%s", string_VkImageTiling(tiling),
+               flags, "FormatProperties.getProperties failed\n");
+          return VK_FORMAT_UNDEFINED;
+        }
+        if ((props.formatProperties.optimalTilingFeatures & flags) == flags) {
           return format;
         }
       }
@@ -85,6 +114,15 @@ VkFormat Device::chooseFormat(VkImageTiling tiling, VkFormatFeatureFlags flags,
   }
 
   return VK_FORMAT_UNDEFINED;
+}
+
+int Device::isExtensionAvailable(const char* name) {
+  for (auto& extProps : availableExtensions) {
+    if (!strcmp(extProps.extensionName, name)) {
+      return 1;
+    }
+  }
+  return 0;
 }
 
 }  // namespace language

@@ -13,7 +13,6 @@ std::vector<VkExtensionProperties>* getExtensions();
 std::vector<VkLayerProperties>* getLayers();
 std::vector<VkPhysicalDevice>* getDevices(VkInstance instance);
 
-std::vector<VkQueueFamilyProperties>* getQueueFamilies(VkPhysicalDevice dev);
 std::vector<VkExtensionProperties>* getDeviceExtensions(VkPhysicalDevice dev);
 
 std::vector<VkSurfaceFormatKHR>* getSurfaceFormats(VkPhysicalDevice dev,

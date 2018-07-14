@@ -100,33 +100,6 @@ std::vector<VkPhysicalDevice>* getDevices(VkInstance instance) {
   return devs;
 }
 
-std::vector<VkQueueFamilyProperties>* getQueueFamilies(VkPhysicalDevice dev) {
-  uint32_t qCount = 0;
-  vkGetPhysicalDeviceQueueFamilyProperties(dev, &qCount, nullptr);
-  auto* qs = new std::vector<VkQueueFamilyProperties>(qCount);
-  vkGetPhysicalDeviceQueueFamilyProperties(dev, &qCount, qs->data());
-  if (qCount > qs->size()) {
-    // This can happen if a queue family was added between the two Enumerate
-    // calls.
-    logF("%s returned count=%u, larger than previously (%zu)\n",
-         "vkGetPhysicalDeviceQueueFamilyProperties(all)", qCount, qs->size());
-    delete qs;
-    return nullptr;
-  }
-
-  for (auto i = qs->begin(); i != qs->end(); i++) {
-    if (i->queueFlags & (VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT)) {
-      // Per the vulkan spec for VkQueueFlagBits, GRAPHICS or COMPUTE always
-      // imply TRANSFER and TRANSFER does not even have to be reported in that
-      // case.
-      //
-      // In order to make life simple, set TRANSFER if TRANSFER is supported.
-      i->queueFlags |= VK_QUEUE_TRANSFER_BIT;
-    }
-  }
-  return qs;
-}
-
 std::vector<VkExtensionProperties>* getDeviceExtensions(VkPhysicalDevice dev) {
   uint32_t extensionCount = 0;
   VkResult r = vkEnumerateDeviceExtensionProperties(dev, nullptr,
