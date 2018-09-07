@@ -75,7 +75,7 @@ goto :eof
 rem
 rem git was found, clone submodules ("init submodules").
 cd %startup_dir%
-git submodule update --init --recursive
+cmd /c git submodule update --recursive
 
 FOR /F "usebackq tokens=1-3" %%A IN (`REG QUERY HKLM\SOFTWARE\Python\PythonCore 2^>nul`) DO call :find_python %%A %%B %%C
 FOR /F "usebackq tokens=1-3" %%A IN (`REG QUERY HKCU\SOFTWARE\Python\PythonCore 2^>nul`) DO call :find_python %%A %%B %%C
